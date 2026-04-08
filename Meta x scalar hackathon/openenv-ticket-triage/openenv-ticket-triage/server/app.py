@@ -17,6 +17,10 @@ except ImportError as e:
         "openenv-core is required. Install with: pip install openenv-core"
     ) from e
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
 try:
     from ..models import TicketAction, TicketObservation
     from .ticket_triage_environment import TicketTriageEnvironment
@@ -34,6 +38,21 @@ app = create_app(
     env_name="ticket-triage",
     max_concurrent_envs=4,
 )
+
+# Dashboard static files path
+dashboard_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dashboard")
+
+@app.get("/")
+async def read_index():
+    return FileResponse(os.path.join(dashboard_path, "index.html"))
+
+@app.get("/styles.css")
+async def read_css():
+    return FileResponse(os.path.join(dashboard_path, "styles.css"), media_type="text/css")
+
+@app.get("/app.js")
+async def read_js():
+    return FileResponse(os.path.join(dashboard_path, "app.js"), media_type="application/javascript")
 
 
 def main(host: str = "0.0.0.0", port: int = 7860):
