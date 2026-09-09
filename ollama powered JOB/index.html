@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RecruitScreen v1.0 — Agentic Talent Screening & Evidence Verification</title>
+  <meta name="description" content="Autonomous recruitment intelligence: JD parsing, resume claim extraction, FAISS evidence retrieval, LLM verification, and deterministic ranking." />
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Ambient background -->
+  <div class="bg-gradient"></div>
+  <div class="bg-grid"></div>
+
+  <div class="app-shell">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div>
+          <div>RecruitScreen</div>
+          <div class="brand-sub">AGENTIC SCREENING · v1.0</div>
+        </div>
+      </div>
+
+      <div class="topbar-spacer"></div>
+
+      <!-- Active Job Badge -->
+      <div id="active-job-indicator" class="status-badge" style="display: none; background: rgba(99,102,241,0.12); color: var(--accent-light); border-color: rgba(99,102,241,0.3);">
+        <span class="status-dot" style="background: var(--accent);"></span>
+        <span id="active-job-title">Senior Fullstack Engineer</span>
+      </div>
+
+      <!-- LLM / Server Health Badge -->
+      <div id="system-status-badge" class="status-badge ok">
+        <span class="status-dot"></span>
+        <span id="system-status-text">Connecting...</span>
+      </div>
+    </header>
+
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+      <div class="nav-section-label">Screening Pipeline</div>
+      <div class="nav-item active" data-page="workspace" id="nav-workspace">
+        <span class="nav-icon">📁</span>
+        <span>Workspace</span>
+      </div>
+      <div class="nav-item" data-page="rankings" id="nav-rankings">
+        <span class="nav-icon">🏆</span>
+        <span>Rankings</span>
+        <span class="nav-badge" id="badge-candidate-count">0</span>
+      </div>
+      <div class="nav-item" data-page="detail" id="nav-detail">
+        <span class="nav-icon">👤</span>
+        <span>Candidate Detail</span>
+      </div>
+      <div class="nav-item" data-page="compare" id="nav-compare">
+        <span class="nav-icon">⚖️</span>
+        <span>Compare</span>
+      </div>
+      <div class="nav-item" data-page="gaps" id="nav-gaps">
+        <span class="nav-icon">📊</span>
+        <span>Gap Analysis</span>
+      </div>
+
+      <div class="nav-section-label">Intelligence</div>
+      <div class="nav-item" data-page="chat" id="nav-chat">
+        <span class="nav-icon">💬</span>
+        <span>Recruiter Chat</span>
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="text-xs text-muted" style="line-height: 1.4;">
+          Powered by <strong>MultiGateway</strong><br/>
+          Local Qwen3 & Groq LLaMA-3.3<br/>
+          SentenceTransformers + FAISS
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content Panels -->
+    <main class="main-content">
+      
+      <!-- ── PAGE 1: WORKSPACE ────────────────────────────────────────── -->
+      <section id="page-workspace" class="page active">
+        <div class="page-header">
+          <h1 class="page-title">Workspace & Pipeline</h1>
+          <p class="page-subtitle">Upload Job Description and Candidate Resumes to launch autonomous agentic screening.</p>
+        </div>
+
+        <div class="page-body">
+          <div class="workspace-grid">
+            <!-- JD Upload Card -->
+            <div class="card">
+              <div class="section-header">
+                <span class="section-title">1. Job Description (JD)</span>
+                <span id="jd-status-tag" class="status-badge" style="font-size:0.68rem;">Awaiting Upload</span>
+              </div>
+              <div class="upload-zone" id="jd-drop-zone">
+                <input type="file" id="jd-file-input" accept=".pdf,.docx,.txt" />
+                <div class="upload-icon">📄</div>
+                <div class="upload-title">Drop Job Description file here</div>
+                <div class="upload-sub">Supports PDF, DOCX, or TXT format</div>
+                <div id="jd-file-info" class="upload-file-list hidden"></div>
+              </div>
+              <div id="jd-preview-box" class="card mt-3 hidden" style="background: var(--bg-deep); border-color: var(--border);">
+                <div class="flex justify-between items-center mb-4">
+                  <span class="font-bold text-sm text-accent" id="jd-preview-name">job_description.pdf</span>
+                  <span class="text-xs font-mono text-muted" id="jd-preview-stats">0 words</span>
+                </div>
+                <p class="text-xs text-muted font-mono" id="jd-preview-text" style="max-height: 100px; overflow-y: auto; white-space: pre-wrap;"></p>
+              </div>
+            </div>
+
+            <!-- Resumes Batch Upload Card -->
+            <div class="card">
+              <div class="section-header">
+                <span class="section-title">2. Candidate Resumes (Batch)</span>
+                <span id="resumes-count-badge" class="nav-badge">0 files</span>
+              </div>
+              <div class="upload-zone" id="resumes-drop-zone">
+                <input type="file" id="resumes-file-input" accept=".pdf,.docx,.txt" multiple />
+                <div class="upload-icon">👥</div>
+                <div class="upload-title">Drop candidate resumes here</div>
+                <div class="upload-sub">Select multiple PDF, DOCX, or TXT files</div>
+                <div id="resumes-file-list" class="upload-file-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Analyze Action Strip -->
+          <div class="card mb-4" style="background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(16,185,129,0.04));">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 style="font-size: 1.1rem; font-weight: 700;">Launch Agentic Screening Pipeline</h3>
+                <p class="text-sm text-muted mt-1">Runs JD extraction, claim parsing, semantic FAISS evidence retrieval, verification, and deterministic scoring.</p>
+              </div>
+              <button id="btn-start-screening" class="btn btn-primary btn-lg" disabled>
+                <span>⚡</span>
+                <span>Start Screening</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Live Pipeline Execution Card -->
+          <div class="card progress-panel hidden" id="pipeline-progress-card">
+            <div class="section-header">
+              <div class="flex items-center gap-2">
+                <div class="spinner" id="pipeline-spinner"></div>
+                <span class="section-title" id="pipeline-status-title">Pipeline Running...</span>
+              </div>
+              <span class="font-mono text-accent text-sm" id="progress-pct">0%</span>
+            </div>
+
+            <!-- Pipeline Visual Stages -->
+            <div class="pipeline-stages mb-4" id="pipeline-visual-stages">
+              <div class="pipeline-stage" id="stage-doc" title="Document Ingestion">1. Ingest</div>
+              <div class="pipeline-stage" id="stage-jd" title="JD Requirement Extraction">2. JD Analyze</div>
+              <div class="pipeline-stage" id="stage-resumes" title="Resume Parsing">3. Resumes</div>
+              <div class="pipeline-stage" id="stage-claims" title="Claim Extraction">4. Claims</div>
+              <div class="pipeline-stage" id="stage-retrieval" title="FAISS Evidence Retrieval">5. Evidence</div>
+              <div class="pipeline-stage" id="stage-verification" title="LLM Evidence Verification">6. Verify</div>
+              <div class="pipeline-stage" id="stage-matching" title="Semantic Skill Matching">7. Match</div>
+              <div class="pipeline-stage" id="stage-scoring" title="Deterministic Scoring">8. Score</div>
+              <div class="pipeline-stage" id="stage-ranking" title="Ranking & Tradeoffs">9. Rank</div>
+              <div class="pipeline-stage" id="stage-gaps" title="Pool Gap Analysis">10. Gaps</div>
+            </div>
+
+            <div class="progress-bar-wrap mb-4">
+              <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
+            </div>
+
+            <!-- Realtime Activity Log -->
+            <div class="progress-log" id="progress-log">
+              <div class="log-line">Ready to initialize orchestrator.</div>
+            </div>
+
+            <div class="mt-4 flex justify-between items-center" id="pipeline-done-actions" style="display: none;">
+              <span class="text-emerald text-sm font-bold">✓ Screening Pipeline Completed Successfully</span>
+              <button id="btn-view-results" class="btn btn-primary btn-sm">
+                <span>View Candidate Rankings →</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PAGE 2: RANKINGS ─────────────────────────────────────────── -->
+      <section id="page-rankings" class="page">
+        <div class="page-header">
+          <h1 class="page-title">Candidate Rankings</h1>
+          <p class="page-subtitle">Ranked shortlists with deterministic score components and evidence verification badges.</p>
+        </div>
+
+        <div class="page-body">
+          <!-- Stats Strip -->
+          <div class="stats-strip">
+            <div class="stat-card accent">
+              <div class="stat-value" id="stat-total-candidates">0</div>
+              <div class="stat-label">Candidates Evaluated</div>
+            </div>
+            <div class="stat-card emerald">
+              <div class="stat-value" id="stat-top-score">0%</div>
+              <div class="stat-label">Top Candidate Score</div>
+            </div>
+            <div class="stat-card amber">
+              <div class="stat-value" id="stat-avg-score">0%</div>
+              <div class="stat-label">Pool Average Score</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-verified-claims">0</div>
+              <div class="stat-label">Claims Grounded</div>
+            </div>
+          </div>
+
+          <!-- Controls Strip -->
+          <div class="card mb-4 flex items-center justify-between" style="padding: 14px 20px;">
+            <div class="flex items-center gap-3">
+              <input type="text" id="filter-candidate-input" class="form-input" placeholder="Search candidate name or skill..." style="width: 280px; padding: 6px 12px; font-size: 0.8rem;" />
+              <select id="sort-candidate-select" class="form-input" style="width: 180px; padding: 6px 12px; font-size: 0.8rem;">
+                <option value="rank">Sort by: Total Rank</option>
+                <option value="evidence">Sort by: Evidence Score</option>
+                <option value="experience">Sort by: Experience Years</option>
+              </select>
+            </div>
+            <div class="text-xs text-muted font-mono">
+              Click candidate card for deep-dive verification evidence
+            </div>
+          </div>
+
+          <!-- Candidate Cards List -->
+          <div id="rankings-container" class="flex flex-col gap-3">
+            <div class="card text-center text-muted" style="padding: 48px 24px;">
+              No candidates screened yet. Upload documents in the Workspace tab and start screening.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PAGE 3: CANDIDATE DETAIL ─────────────────────────────────── -->
+      <section id="page-detail" class="page">
+        <div class="page-header flex justify-between items-center">
+          <div>
+            <h1 class="page-title" id="detail-candidate-name">Candidate Detail</h1>
+            <p class="page-subtitle" id="detail-candidate-sub">Detailed skill evidence breakdown, FAISS passages, and verification explanations.</p>
+          </div>
+          <button id="btn-back-to-rankings" class="btn btn-secondary btn-sm">
+            ← Back to Rankings
+          </button>
+        </div>
+
+        <div class="page-body">
+          <div id="detail-empty-state" class="card text-center text-muted" style="padding: 48px 24px;">
+            Please select a candidate from the Rankings tab to view their detailed evidence profile.
+          </div>
+
+          <div id="detail-content-area" class="hidden">
+            <!-- Candidate Summary Hero Card -->
+            <div class="card mb-4" style="background: linear-gradient(135deg, var(--bg-card), var(--bg-elevated));">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                  <div class="score-ring" id="detail-score-ring">
+                    <span id="detail-total-score">0</span>
+                    <span class="score-ring-label">SCORE</span>
+                  </div>
+                  <div>
+                    <h2 style="font-size: 1.4rem; font-weight: 800;" id="detail-header-name">Jane Doe</h2>
+                    <div class="text-xs text-muted font-mono mt-1" id="detail-header-meta">Rank #1 · 5.2 Yrs Experience · Bachelor's in CS</div>
+                    <div class="text-xs text-secondary mt-2" id="detail-tradeoff-note" style="font-style: italic; max-width: 600px;"></div>
+                  </div>
+                </div>
+
+                <!-- Score Component Breakdown -->
+                <div class="grid-2 gap-2" style="width: 320px;">
+                  <div class="card" style="padding: 8px 12px; background: var(--bg-deep);">
+                    <div class="text-xs text-muted">Required Skills (40%)</div>
+                    <div class="font-mono font-bold text-accent" id="score-comp-skills">0 / 40</div>
+                  </div>
+                  <div class="card" style="padding: 8px 12px; background: var(--bg-deep);">
+                    <div class="text-xs text-muted">Experience (25%)</div>
+                    <div class="font-mono font-bold text-emerald" id="score-comp-exp">0 / 25</div>
+                  </div>
+                  <div class="card" style="padding: 8px 12px; background: var(--bg-deep);">
+                    <div class="text-xs text-muted">Evidence Strength (20%)</div>
+                    <div class="font-mono font-bold text-amber" id="score-comp-evidence">0 / 20</div>
+                  </div>
+                  <div class="card" style="padding: 8px 12px; background: var(--bg-deep);">
+                    <div class="text-xs text-muted">Preferred / Edu (15%)</div>
+                    <div class="font-mono font-bold text-secondary" id="score-comp-other">0 / 15</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skill Verification Breakdown Table -->
+            <div class="card">
+              <div class="section-header">
+                <span class="section-title">Skill-by-Skill Verification & Grounded Evidence Quotes</span>
+                <span class="text-xs text-muted">Click any quote block to expand/collapse</span>
+              </div>
+              <div id="detail-skills-list" class="flex flex-col">
+                <!-- Skill rows injected here -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PAGE 4: COMPARE ──────────────────────────────────────────── -->
+      <section id="page-compare" class="page">
+        <div class="page-header">
+          <h1 class="page-title">Candidate Comparison</h1>
+          <p class="page-subtitle">Side-by-side trade-off analysis generated by cloud LLM reasoning and deterministic metric comparison.</p>
+        </div>
+
+        <div class="page-body">
+          <!-- Selection bar -->
+          <div class="card mb-4">
+            <div class="flex items-center gap-4">
+              <div style="flex: 1;">
+                <label class="form-label">Candidate A</label>
+                <select id="compare-select-a" class="form-input">
+                  <option value="">Select Candidate A...</option>
+                </select>
+              </div>
+              <div style="font-size: 1.2rem; font-weight: 800; color: var(--text-muted); padding-top: 18px;">VS</div>
+              <div style="flex: 1;">
+                <label class="form-label">Candidate B</label>
+                <select id="compare-select-b" class="form-input">
+                  <option value="">Select Candidate B...</option>
+                </select>
+              </div>
+              <div style="padding-top: 22px;">
+                <button id="btn-run-compare" class="btn btn-primary" disabled>
+                  <span>⚖️ Compare Candidates</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Trade-off Narrative Card -->
+          <div id="compare-narrative-card" class="card mb-4 hidden" style="background: rgba(99,102,241,0.08); border-color: var(--border-bright);">
+            <div class="section-header">
+              <span class="section-title text-accent">⚡ AI Executive Trade-off Analysis</span>
+              <span class="text-xs font-mono text-muted" id="compare-winner-badge"></span>
+            </div>
+            <p id="compare-narrative-text" class="text-sm" style="line-height: 1.7; color: var(--text-primary); white-space: pre-wrap;"></p>
+          </div>
+
+          <!-- Comparison Table -->
+          <div id="compare-table-container" class="hidden">
+            <div class="compare-grid" id="compare-grid">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PAGE 5: GAPS ─────────────────────────────────────────────── -->
+      <section id="page-gaps" class="page">
+        <div class="page-header">
+          <h1 class="page-title">Pool-Level Gap Analysis</h1>
+          <p class="page-subtitle">Aggregated skill coverage across the applicant pool to identify critical hiring risks.</p>
+        </div>
+
+        <div class="page-body">
+          <div class="card mb-4">
+            <div class="section-header">
+              <span class="section-title">JD Requirement Coverage Breakdown</span>
+              <div class="flex gap-2">
+                <span class="gap-risk-badge risk-adequate">Adequate (&gt;60%)</span>
+                <span class="gap-risk-badge risk-moderate">Moderate (30-60%)</span>
+                <span class="gap-risk-badge risk-high">High Risk (&lt;30%)</span>
+              </div>
+            </div>
+            <div id="gap-rows-container">
+              <div class="text-center text-muted" style="padding: 32px;">
+                Run screening to generate pool gap analytics.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PAGE 6: CHAT ─────────────────────────────────────────────── -->
+      <section id="page-chat" class="page">
+        <div class="chat-layout">
+          <!-- Message history -->
+          <div class="chat-messages" id="chat-messages">
+            <div class="chat-message">
+              <div class="chat-avatar avatar-ai">🤖</div>
+              <div class="chat-bubble bubble-ai">
+                <strong>Hello! I am your Recruitment Screening Assistant.</strong><br/>
+                I am fully grounded in the job requirements, candidate resumes, and evidence verification results from this screening run. You can ask me questions like:
+                <ul style="margin-top: 8px; margin-left: 18px; font-size: 0.82rem; color: var(--text-secondary);">
+                  <li>"Who is the top candidate and why?"</li>
+                  <li>"Compare the Python and Cloud skills of Candidate 1 vs Candidate 2"</li>
+                  <li>"Which candidate has the most verified production experience?"</li>
+                  <li>"What are the biggest skill gaps in this applicant pool?"</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chat Input -->
+          <div class="chat-input-area">
+            <div class="chat-suggestions mb-2">
+              <span class="suggestion-chip" data-query="Who is the top ranked candidate and what makes them stand out?">Top candidate rationale</span>
+              <span class="suggestion-chip" data-query="Compare the top two candidates in detail.">Compare top 2</span>
+              <span class="suggestion-chip" data-query="What critical JD skills are missing or weak across the pool?">Pool skill gaps</span>
+              <span class="suggestion-chip" data-query="Which candidate has the strongest verified evidence?">Strongest evidence</span>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="chat-input" class="chat-input" placeholder="Ask any question about candidates, skills, or evidence..." rows="1"></textarea>
+              <button id="btn-chat-send" class="btn btn-primary" style="height: 44px;">
+                <span>Send</span>
+                <span>➤</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Toast notification outlet -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Application Logic -->
+  <script src="app.js"></script>
+</body>
+</html>
