@@ -961,6 +961,7 @@
         body: JSON.stringify({
           messages: state.chatMessages,
           run_id: state.runId,
+          session_id: state.sessionId,
         }),
       });
       const data = await res.json();

@@ -1,29 +1,25 @@
 """
-RecruitScreen v1.0 — Recruitment Orchestrator
-───────────────────────────────────────────────
-The agentic brain that coordinates the full screening pipeline.
+RecruitScreen / ARIA Core — Recruitment Orchestrator
+────────────────────────────────────────────────────
+Agentic orchestrator coordinating the lean, two-model candidate screening pipeline.
 
 Pipeline:
-  Goal → Plan → Execute → Verify → Continue
-
-Stages:
-  1.  Process JD + resumes (DocumentProcessor)
-  2.  Analyze JD          (JDAnalyzerAgent)
-  3.  Analyze resumes     (ResumeAnalyzerAgent × N)
-  4.  Build FAISS indexes (EvidenceRetrievalAgent)
-  5.  Extract claims      (ClaimExtractorAgent × N)
-  6.  Retrieve evidence   (EvidenceRetrievalAgent × N)
-  7.  Verify evidence     (EvidenceVerifierAgent × N × M)
-  8.  Semantic matching   (SemanticSkillMatcher × N)
-  9.  Score candidates    (CandidateScorer × N)
-  10. Rank + compare      (CandidateComparator)
-  11. Gap analysis        (RequirementGapAnalyzer)
-  12. Return ScreeningResult
+  1. Process Documents (PyMuPDF / docx clean text extraction)
+  2. Analyze JD (Llama 3.2 + Pydantic validation)
+  3. Analyze Resumes (Llama 3.2 + Pydantic validation)
+  4. Extract Skill Claims (Llama 3.2)
+  5. Retrieve Evidence (Fast section-aware extraction)
+  6. Verify Evidence (🟢 Strongly Supported, 🟡 Partially Supported, 🔴 Unsupported, ⚪ Not Mentioned)
+  7. Semantic Skill Matching (Taxonomy + normalized matching)
+  8. Calculate Deterministic Scores (Python: 40% Required, 25% Experience, 20% Evidence, 10% Preferred, 5% Education)
+  9. Rank & Compare Top Candidates (Groq trade-off reasoning)
+  10. Identify Skill Gaps (Python pool stats + Groq advisory summary)
+  11. Persist to SQLite Recruitment Memory
 """
 
 import time
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
 from .models import (
     ScreeningResult, PipelineStage, CandidateProfile,
@@ -38,44 +34,31 @@ from .agents.skill_matcher      import SemanticSkillMatcher
 from .ranking.scorer            import CandidateScorer
 from .ranking.comparator        import CandidateComparator
 from .ranking.gap_analyzer      import RequirementGapAnalyzer
+from .memory_store              import RecruitmentMemory
 
 
 class RecruitmentOrchestrator:
     """
-    Coordinates the full 11-stage agentic screening pipeline.
-
-    Progress is reported via an optional callback so the server
-    can stream updates to the frontend via SSE.
+    Coordinates the agentic talent screening pipeline.
+    Progress is reported via an optional callback so the server streams updates.
     """
 
-    PIPELINE_STAGES = [
-        (PipelineStage.PROCESSING_DOCS,     "Processing documents",        5),
-        (PipelineStage.ANALYZING_JD,        "Analyzing job description",   15),
-        (PipelineStage.ANALYZING_RESUMES,   "Analyzing resumes",           30),
-        (PipelineStage.EXTRACTING_CLAIMS,   "Extracting skill claims",     45),
-        (PipelineStage.RETRIEVING_EVIDENCE, "Retrieving evidence",         60),
-        (PipelineStage.VERIFYING_EVIDENCE,  "Verifying evidence",          75),
-        (PipelineStage.MATCHING_SKILLS,     "Matching skills semantically", 85),
-        (PipelineStage.SCORING,             "Scoring candidates",          90),
-        (PipelineStage.RANKING,             "Ranking & comparing",         95),
-        (PipelineStage.GAP_ANALYSIS,        "Analyzing skill gaps",        98),
-    ]
-
-    def __init__(self, gateway, router):
+    def __init__(self, gateway, router, db_path: str = None):
         self.gateway = gateway
         self.router  = router
 
-        # Initialize all agents
-        self.doc_processor       = DocumentProcessor()
-        self.jd_analyzer         = JDAnalyzerAgent(gateway, router)
-        self.resume_analyzer     = ResumeAnalyzerAgent(gateway, router)
-        self.claim_extractor     = ClaimExtractorAgent(gateway, router)
-        self.evidence_retrieval  = EvidenceRetrievalAgent()
-        self.evidence_verifier   = EvidenceVerifierAgent(gateway, router)
-        self.skill_matcher       = SemanticSkillMatcher()
-        self.scorer              = CandidateScorer()
-        self.comparator          = CandidateComparator(gateway, router)
-        self.gap_analyzer        = RequirementGapAnalyzer()
+        # Initialize all agents & services
+        self.doc_processor      = DocumentProcessor()
+        self.jd_analyzer        = JDAnalyzerAgent(gateway, router)
+        self.resume_analyzer    = ResumeAnalyzerAgent(gateway, router)
+        self.claim_extractor    = ClaimExtractorAgent(gateway, router)
+        self.evidence_retrieval = EvidenceRetrievalAgent()
+        self.evidence_verifier  = EvidenceVerifierAgent(gateway, router)
+        self.skill_matcher      = SemanticSkillMatcher(gateway, router)
+        self.scorer             = CandidateScorer()
+        self.comparator         = CandidateComparator(gateway, router)
+        self.gap_analyzer       = RequirementGapAnalyzer(gateway, router)
+        self.memory             = RecruitmentMemory(db_path=db_path)
 
     def run_screening(
         self,
@@ -86,15 +69,6 @@ class RecruitmentOrchestrator:
     ) -> ScreeningResult:
         """
         Run the full agentic screening pipeline.
-
-        Args:
-            jd_file:      (filename, file_bytes) for the job description
-            resume_files: list of (filename, file_bytes) for resumes
-            session_id:   Optional session identifier
-            progress_cb:  Optional callback(ScreeningResult) called after each stage
-
-        Returns:
-            Complete ScreeningResult
         """
         t0         = time.time()
         session_id = session_id or str(uuid.uuid4())
@@ -113,7 +87,7 @@ class RecruitmentOrchestrator:
 
         try:
             # ── Stage 1: Process Documents ────────────────────────────
-            update(PipelineStage.PROCESSING_DOCS, 5, "Processing documents...")
+            update(PipelineStage.PROCESSING_DOCS, 5, "Processing documents (PyMuPDF & python-docx)...")
 
             jd_filename, jd_bytes = jd_file
             jd_doc = self.doc_processor.process_jd(jd_filename, jd_bytes)
@@ -130,28 +104,29 @@ class RecruitmentOrchestrator:
                 result.pipeline_stage = PipelineStage.FAILED
                 return result
 
-            update(PipelineStage.PROCESSING_DOCS, 8,
-                   f"Processed JD + {len(valid_resumes)}/{len(resume_docs)} resumes")
+            update(PipelineStage.PROCESSING_DOCS, 10,
+                   f"Extracted clean text for JD + {len(valid_resumes)}/{len(resume_docs)} resumes")
 
-            # ── Stage 2: Analyze JD ───────────────────────────────────
-            update(PipelineStage.ANALYZING_JD, 12, "Extracting JD requirements...")
+            # ── Stage 2: Analyze JD (Llama 3.2 + Pydantic) ────────────
+            update(PipelineStage.ANALYZING_JD, 15, "Analyzing Job Description with Llama 3.2...")
             jd_analysis = self.jd_analyzer.analyze(jd_doc["raw_text"], jd_filename)
             result.jd_analysis = jd_analysis
 
             if not jd_analysis.required_skills:
-                update(PipelineStage.ANALYZING_JD, 15,
-                       f"⚠ No required skills extracted. Check JD format.")
+                update(PipelineStage.ANALYZING_JD, 20,
+                       "⚠ No required skills explicitly extracted. Falling back to key skills.")
             else:
-                update(PipelineStage.ANALYZING_JD, 15,
+                update(PipelineStage.ANALYZING_JD, 20,
                        f"JD analyzed: {jd_analysis.role_title} — "
-                       f"{len(jd_analysis.required_skills)} required skills")
+                       f"{len(jd_analysis.required_skills)} required, "
+                       f"{len(jd_analysis.preferred_skills)} preferred skills")
 
-            # ── Stage 3: Analyze Resumes ──────────────────────────────
-            update(PipelineStage.ANALYZING_RESUMES, 18, "Analyzing candidate resumes...")
+            # ── Stage 3: Analyze Resumes (Llama 3.2 + Pydantic) ───────
+            update(PipelineStage.ANALYZING_RESUMES, 22, "Extracting candidate profiles with Llama 3.2...")
             profiles: list[CandidateProfile] = []
 
             for i, resume_doc in enumerate(valid_resumes):
-                pct  = 18 + (i / len(valid_resumes)) * 12
+                pct  = 22 + (i / len(valid_resumes)) * 18
                 name = resume_doc["candidate_name"]
                 update(PipelineStage.ANALYZING_RESUMES, pct,
                        f"Analyzing resume: {name} ({i+1}/{len(valid_resumes)})")
@@ -165,56 +140,49 @@ class RecruitmentOrchestrator:
                 profiles.append(profile)
 
             result.candidates = profiles
-            update(PipelineStage.ANALYZING_RESUMES, 30,
-                   f"Analyzed {len(profiles)} candidate profiles")
+            update(PipelineStage.ANALYZING_RESUMES, 40,
+                   f"Parsed and validated {len(profiles)} candidate profiles")
 
-            # ── Stage 4: Build FAISS Indexes (Evidence Infrastructure) ─
-            update(PipelineStage.RETRIEVING_EVIDENCE, 32, "Building semantic indexes...")
-            for profile in profiles:
-                self.evidence_retrieval.build_index(profile)
-            update(PipelineStage.RETRIEVING_EVIDENCE, 35,
-                   f"Semantic indexes built for {len(profiles)} candidates")
-
-            # ── Stage 5: Extract Claims ────────────────────────────────
-            update(PipelineStage.EXTRACTING_CLAIMS, 36, "Extracting skill claims...")
-            all_claims: dict[str, list] = {}   # candidate_id → claims
+            # ── Stage 4: Extract Skill Claims (Llama 3.2) ─────────────
+            update(PipelineStage.EXTRACTING_CLAIMS, 42, "Extracting skill claims for JD requirements...")
+            all_claims: dict[str, list] = {}
 
             for i, profile in enumerate(profiles):
-                pct = 36 + (i / len(profiles)) * 9
+                pct = 42 + (i / len(profiles)) * 13
                 update(PipelineStage.EXTRACTING_CLAIMS, pct,
                        f"Extracting claims: {profile.name} ({i+1}/{len(profiles)})")
                 claims = self.claim_extractor.extract(jd_analysis, profile)
                 all_claims[profile.candidate_id] = claims
 
-            update(PipelineStage.EXTRACTING_CLAIMS, 45,
-                   f"Claims extracted for {len(profiles)} candidates")
+            update(PipelineStage.EXTRACTING_CLAIMS, 55,
+                   f"Extracted claims for {len(profiles)} candidates")
 
-            # ── Stage 6 & 7: Retrieve + Verify Evidence ───────────────
-            update(PipelineStage.RETRIEVING_EVIDENCE, 46, "Retrieving & verifying evidence...")
-            all_verifications: dict[str, list] = {}   # candidate_id → verifs
+            # ── Stage 5 & 6: Retrieve & Verify Evidence ───────────────
+            update(PipelineStage.VERIFYING_EVIDENCE, 56, "Verifying candidate evidence (🟢/🟡/🔴/⚪)...")
+            all_verifications: dict[str, list] = {}
 
             for i, profile in enumerate(profiles):
-                pct = 46 + (i / len(profiles)) * 29
+                pct = 56 + (i / len(profiles)) * 20
                 update(PipelineStage.VERIFYING_EVIDENCE, pct,
-                       f"Verifying {profile.name} ({i+1}/{len(profiles)})...")
+                       f"Verifying evidence for {profile.name} ({i+1}/{len(profiles)})...")
 
-                claims   = all_claims.get(profile.candidate_id, [])
+                claims = all_claims.get(profile.candidate_id, [])
                 if not claims:
                     all_verifications[profile.candidate_id] = []
                     continue
 
-                # Retrieve evidence for all claims at once
+                # Retrieve evidence passages across sections
                 evidence_map = self.evidence_retrieval.retrieve_all(claims, profile)
 
                 # Verify each claim
                 verifications = self.evidence_verifier.verify_all(claims, evidence_map)
                 all_verifications[profile.candidate_id] = verifications
 
-            update(PipelineStage.VERIFYING_EVIDENCE, 75,
-                   f"Evidence verified for {len(profiles)} candidates")
+            update(PipelineStage.VERIFYING_EVIDENCE, 76,
+                   f"Verified concrete evidence for {len(profiles)} candidates")
 
-            # ── Stage 8: Semantic Skill Matching ──────────────────────
-            update(PipelineStage.MATCHING_SKILLS, 76, "Semantic skill matching...")
+            # ── Stage 7: Semantic Skill Matching ──────────────────────
+            update(PipelineStage.MATCHING_SKILLS, 78, "Performing semantic skill matching...")
             all_req_matches:  dict[str, list] = {}
             all_pref_matches: dict[str, list] = {}
 
@@ -224,11 +192,10 @@ class RecruitmentOrchestrator:
                 all_req_matches[profile.candidate_id]  = req_m
                 all_pref_matches[profile.candidate_id] = pref_m
 
-            update(PipelineStage.MATCHING_SKILLS, 85,
-                   "Skill matching complete")
+            update(PipelineStage.MATCHING_SKILLS, 84, "Semantic skill matching complete")
 
-            # ── Stage 9: Score Candidates ─────────────────────────────
-            update(PipelineStage.SCORING, 86, "Scoring candidates...")
+            # ── Stage 8: Score Candidates (Python Deterministic) ──────
+            update(PipelineStage.SCORING, 86, "Calculating deterministic Python scores (40/25/20/10/5)...")
             all_scores = []
 
             for profile in profiles:
@@ -242,21 +209,27 @@ class RecruitmentOrchestrator:
                 all_scores.append(score)
                 print(f"[Orchestrator] Score {profile.name}: {score.total_score:.1f}")
 
-            update(PipelineStage.SCORING, 90, f"Scored {len(all_scores)} candidates")
+            update(PipelineStage.SCORING, 90, f"Scored {len(all_scores)} candidates deterministically")
 
-            # ── Stage 10: Rank + Compare ──────────────────────────────
-            update(PipelineStage.RANKING, 91, "Ranking candidates...")
-            ranked_list       = self.comparator.rank(all_scores, jd_analysis)
+            # ── Stage 9: Rank Candidates & Trade-off Analysis (Groq) ──
+            update(PipelineStage.RANKING, 92, "Ranking candidates & generating Groq trade-off analysis...")
+            ranked_list        = self.comparator.rank(all_scores, jd_analysis)
             result.ranked_list = ranked_list
-            update(PipelineStage.RANKING, 95,
-                   f"Rankings complete. Top: {ranked_list.candidates[0].score.candidate_name if ranked_list.candidates else 'N/A'}")
+            top_name = ranked_list.candidates[0].score.candidate_name if ranked_list.candidates else "N/A"
+            update(PipelineStage.RANKING, 95, f"Ranking complete. Top candidate: {top_name}")
 
-            # ── Stage 11: Gap Analysis ────────────────────────────────
-            update(PipelineStage.GAP_ANALYSIS, 96, "Analyzing skill gaps...")
+            # ── Stage 10: Requirement Gap Analysis (Python + Groq) ────
+            update(PipelineStage.GAP_ANALYSIS, 96, "Calculating requirement gaps across applicant pool...")
             gap_report        = self.gap_analyzer.analyze(jd_analysis, all_scores)
             result.gap_report = gap_report
             update(PipelineStage.GAP_ANALYSIS, 98,
-                   f"Gap analysis: {len(gap_report.high_risk_skills)} high-risk skills")
+                   f"Gap analysis complete: {len(gap_report.high_risk_skills)} skill shortages identified")
+
+            # ── Stage 11: Persist to SQLite Recruitment Memory ────────
+            try:
+                self.memory.save_screening_result(result)
+            except Exception as e:
+                print(f"[Orchestrator] Warning: Could not save to SQLite memory: {e}")
 
             # ── Done ──────────────────────────────────────────────────
             result.total_time_secs = time.time() - t0
@@ -274,8 +247,8 @@ class RecruitmentOrchestrator:
 
         except Exception as e:
             import traceback
-            result.error          = str(e)
-            result.pipeline_stage = PipelineStage.FAILED
+            result.error           = str(e)
+            result.pipeline_stage  = PipelineStage.FAILED
             result.total_time_secs = time.time() - t0
             print(f"[Orchestrator] ✗ Pipeline failed: {e}")
             traceback.print_exc()

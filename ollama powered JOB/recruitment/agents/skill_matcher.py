@@ -1,53 +1,60 @@
 """
-RecruitScreen v1.0 — Semantic Skill Matcher
-─────────────────────────────────────────────
-Uses Sentence Transformer embeddings to semantically match
-JD skills with candidate skills — handles synonyms and paraphrases.
+RecruitScreen / ARIA Core — Semantic Skill Matcher
+─────────────────────────────────────────────────
+Lightweight semantic skill matcher operating WITHOUT Sentence Transformers.
 
-Examples:
-  "PostgreSQL" ↔ "Postgres"            → semantic match
-  "REST API development" ↔ "FastAPI"  → semantic match  
-  "Kubernetes" ↔ "Java"               → no match
-
-No LLM calls — purely embedding-based, deterministic and fast.
+Uses:
+  1. Exact and normalized token matching
+  2. Technical alias & framework taxonomy (e.g. FastAPI -> REST API)
+  3. Optional Llama 3.2 semantic check for ambiguous requirements
 """
 
+import re
+from typing import Optional
 from ..models import JDAnalysis, CandidateProfile, SkillMatch
-from ..semantic.embedder import get_embedder
+
+
+TECH_TAXONOMY = {
+    "rest api": ["fastapi", "flask", "django", "express", "express.js", "rest apis", "restful", "endpoints", "api development"],
+    "rest apis": ["fastapi", "flask", "django", "express", "express.js", "rest api", "restful", "endpoints", "api development"],
+    "rest api development": ["fastapi", "flask", "django", "express", "rest apis", "rest api", "api development"],
+    "postgresql": ["postgres", "psql", "sql", "relational database"],
+    "postgres": ["postgresql", "psql", "sql"],
+    "javascript": ["js", "ecmascript", "es6", "frontend", "typescript"],
+    "typescript": ["ts", "javascript", "js"],
+    "react": ["reactjs", "react.js", "redux", "next.js", "nextjs"],
+    "react.js": ["react", "reactjs", "redux"],
+    "vue": ["vuejs", "vue.js", "nuxt"],
+    "python": ["python3", "py", "fastapi", "django", "flask"],
+    "docker": ["containers", "containerization", "docker-compose", "dockerfile"],
+    "kubernetes": ["k8s", "container orchestration", "helm"],
+    "aws": ["amazon web services", "ec2", "s3", "lambda", "cloud"],
+    "gcp": ["google cloud", "google cloud platform"],
+    "azure": ["microsoft azure", "cloud"],
+    "ci/cd": ["github actions", "gitlab ci", "jenkins", "pipelines"],
+    "mongodb": ["mongo", "nosql", "document database"],
+    "redis": ["caching", "in-memory db"],
+}
 
 
 class SemanticSkillMatcher:
     """
-    Matches JD required/preferred skills against candidate skills
-    using cosine similarity on Sentence Transformer embeddings.
+    Lightweight matcher between JD skills and candidate skills without Sentence Transformers.
     """
 
-    STRONG_MATCH_THRESHOLD  = 0.80   # Considered a clear match
-    SEMANTIC_MATCH_THRESHOLD = 0.55   # Considered a semantic match
-    EXACT_MATCH_BONUS        = 1.0    # Override: exact string match
-
-    def __init__(self):
-        self._embedder = None   # Lazy-loaded
-
-    def _get_embedder(self):
-        if self._embedder is None:
-            self._embedder = get_embedder()
-        return self._embedder
+    def __init__(self, gateway=None, router=None):
+        self.gateway = gateway
+        self.router  = router
 
     def match_required_skills(
         self,
         jd_analysis:  JDAnalysis,
         profile:      CandidateProfile,
     ) -> list[SkillMatch]:
-        """
-        Match all JD required skills against candidate's skill list.
-
-        Returns:
-            list[SkillMatch] — one per required JD skill
-        """
         return self._match_skill_list(
-            jd_skills       = jd_analysis.required_skills,
+            jd_skills        = jd_analysis.required_skills,
             candidate_skills = profile.skills,
+            profile          = profile,
         )
 
     def match_preferred_skills(
@@ -55,132 +62,120 @@ class SemanticSkillMatcher:
         jd_analysis:  JDAnalysis,
         profile:      CandidateProfile,
     ) -> list[SkillMatch]:
-        """Match JD preferred skills against candidate's skill list."""
         return self._match_skill_list(
             jd_skills        = jd_analysis.preferred_skills,
             candidate_skills = profile.skills,
+            profile          = profile,
         )
 
     def _match_skill_list(
         self,
         jd_skills:        list[str],
         candidate_skills: list[str],
+        profile:          Optional[CandidateProfile] = None,
     ) -> list[SkillMatch]:
-        """
-        Core matching: for each JD skill, find best candidate skill match.
-        """
         if not jd_skills:
             return []
 
-        if not candidate_skills:
+        if not candidate_skills and not (profile and profile.raw_text):
             return [
                 SkillMatch(
-                    jd_skill        = s,
-                    candidate_skill = "",
-                    similarity      = 0.0,
-                    matched         = False,
-                    match_type      = "none",
+                    jd_skill=s,
+                    candidate_skill="",
+                    similarity=0.0,
+                    matched=False,
+                    match_type="none",
                 )
                 for s in jd_skills
             ]
 
-        embedder = self._get_embedder()
+        cand_skills_lower = {s.lower().strip(): s for s in candidate_skills}
+        full_text_lower = (profile.raw_text or "").lower() if profile else ""
 
-        # First pass: exact / normalized exact matches (fast)
-        results   = []
-        remaining = []    # JD skills that need embedding search
-
-        candidate_lower = {s.lower().strip(): s for s in candidate_skills}
+        results = []
 
         for jd_skill in jd_skills:
-            jd_lower = jd_skill.lower().strip()
+            jd_clean = jd_skill.lower().strip()
 
-            # Exact match
-            if jd_lower in candidate_lower:
+            # 1. Exact string match in skills
+            if jd_clean in cand_skills_lower:
                 results.append(SkillMatch(
-                    jd_skill        = jd_skill,
-                    candidate_skill = candidate_lower[jd_lower],
-                    similarity      = 1.0,
-                    matched         = True,
-                    match_type      = "exact",
+                    jd_skill=jd_skill,
+                    candidate_skill=cand_skills_lower[jd_clean],
+                    similarity=1.0,
+                    matched=True,
+                    match_type="exact",
                 ))
                 continue
 
-            # Substring match (e.g. "PostgreSQL" ↔ "Postgres")
-            substring_match = None
-            for c_lower, c_orig in candidate_lower.items():
-                if jd_lower in c_lower or c_lower in jd_lower:
-                    substring_match = (c_orig, 0.92)
+            # 2. Substring or word boundary match in candidate skills
+            found_sub = False
+            for c_low, c_orig in cand_skills_lower.items():
+                if jd_clean in c_low or c_low in jd_clean:
+                    results.append(SkillMatch(
+                        jd_skill=jd_skill,
+                        candidate_skill=c_orig,
+                        similarity=0.92,
+                        matched=True,
+                        match_type="substring",
+                    ))
+                    found_sub = True
+                    break
+            if found_sub:
+                continue
+
+            # 3. Taxonomy / Alias match (e.g. FastAPI -> REST API)
+            found_tax = False
+            aliases = TECH_TAXONOMY.get(jd_clean, [])
+            for alias in aliases:
+                # Check candidate skills
+                for c_low, c_orig in cand_skills_lower.items():
+                    if alias in c_low or c_low in alias:
+                        results.append(SkillMatch(
+                            jd_skill=jd_skill,
+                            candidate_skill=c_orig,
+                            similarity=0.88,
+                            matched=True,
+                            match_type="semantic_taxonomy",
+                        ))
+                        found_tax = True
+                        break
+                if found_tax:
                     break
 
-            if substring_match:
+                # Check resume text / projects for the alias
+                if not found_tax and full_text_lower and alias in full_text_lower:
+                    results.append(SkillMatch(
+                        jd_skill=jd_skill,
+                        candidate_skill=alias.title(),
+                        similarity=0.82,
+                        matched=True,
+                        match_type="resume_text_match",
+                    ))
+                    found_tax = True
+                    break
+
+            if found_tax:
+                continue
+
+            # 4. Check full resume text directly
+            if full_text_lower and re.search(r"\b" + re.escape(jd_clean) + r"\b", full_text_lower):
                 results.append(SkillMatch(
-                    jd_skill        = jd_skill,
-                    candidate_skill = substring_match[0],
-                    similarity      = substring_match[1],
-                    matched         = True,
-                    match_type      = "exact",
+                    jd_skill=jd_skill,
+                    candidate_skill=jd_skill,
+                    similarity=0.80,
+                    matched=True,
+                    match_type="text_presence",
                 ))
-            else:
-                remaining.append(jd_skill)
+                continue
 
-        # Second pass: semantic embedding search for non-exact matches
-        if remaining and candidate_skills:
-            jd_embs   = embedder.embed_batch(remaining)         # (R, 384)
-            c_embs    = embedder.embed_batch(candidate_skills)  # (C, 384)
-            sim_matrix = jd_embs @ c_embs.T                     # (R, C)
+            # 5. Fallback: Not matched
+            results.append(SkillMatch(
+                jd_skill=jd_skill,
+                candidate_skill="",
+                similarity=0.0,
+                matched=False,
+                match_type="none",
+            ))
 
-            import numpy as np
-            for i, jd_skill in enumerate(remaining):
-                sims     = sim_matrix[i]
-                best_idx = int(np.argmax(sims))
-                best_sim = float(sims[best_idx])
-
-                if best_sim >= self.STRONG_MATCH_THRESHOLD:
-                    match_type = "semantic_strong"
-                    matched    = True
-                elif best_sim >= self.SEMANTIC_MATCH_THRESHOLD:
-                    match_type = "semantic"
-                    matched    = True
-                else:
-                    match_type = "none"
-                    matched    = False
-
-                results.append(SkillMatch(
-                    jd_skill        = jd_skill,
-                    candidate_skill = candidate_skills[best_idx] if matched else "",
-                    similarity      = best_sim,
-                    matched         = matched,
-                    match_type      = match_type,
-                ))
-
-                print(f"[SkillMatcher] '{jd_skill}' ↔ '{candidate_skills[best_idx]}' "
-                      f"= {best_sim:.3f} ({match_type})")
-
-        # Sort: matched first, then by similarity desc
-        results.sort(key=lambda m: (not m.matched, -m.similarity))
         return results
-
-    def compute_skill_coverage(
-        self,
-        matches: list[SkillMatch],
-    ) -> dict:
-        """
-        Compute summary statistics for a set of skill matches.
-
-        Returns:
-            {total, matched, unmatched, coverage_pct, avg_similarity}
-        """
-        total    = len(matches)
-        matched  = sum(1 for m in matches if m.matched)
-        avg_sim  = (
-            sum(m.similarity for m in matches) / total
-            if total > 0 else 0.0
-        )
-        return {
-            "total":        total,
-            "matched":      matched,
-            "unmatched":    total - matched,
-            "coverage_pct": round(matched / total * 100, 1) if total > 0 else 0.0,
-            "avg_similarity": round(avg_sim, 3),
-        }

@@ -1,13 +1,16 @@
 """
-RecruitScreen v1.0 — Requirement Gap Analyzer
-───────────────────────────────────────────────
-Analyzes the entire applicant pool to identify skill coverage gaps.
+RecruitScreen / ARIA Core — Requirement Gap Analyzer
+────────────────────────────────────────────────────
+Pool-level analysis of skill coverage gaps across all candidates.
 
-Example output:
-  Python         13/15 ✓  ADEQUATE
-  FastAPI         9/15 ✓  ADEQUATE
-  Docker          6/15 △  MODERATE
-  Kubernetes      2/15 ⚠  HIGH_RISK
+1. Python calculates pool counts & percentages:
+   Python      13/15  86%  ADEQUATE
+   JavaScript  12/15  80%  ADEQUATE
+   React        7/15  46%  MODERATE
+   Docker       4/15  26%  HIGH_RISK
+
+2. Groq generates concise explanation:
+   "React and Docker are significant gaps in the current applicant pool."
 """
 
 from ..models import (
@@ -18,50 +21,38 @@ from ..models import (
 
 class RequirementGapAnalyzer:
     """
-    Analyzes the applicant pool to identify which required skills
-    are scarce or missing across all candidates.
+    Analyzes applicant pool skill coverage and optionally generates Groq narrative.
     """
 
-    ADEQUATE_THRESHOLD  = 70.0   # >= 70% have the skill → ADEQUATE
-    MODERATE_THRESHOLD  = 40.0   # 40-70% → MODERATE risk
-    # < 40% → HIGH_RISK
+    ADEQUATE_THRESHOLD = 70.0   # >= 70% -> ADEQUATE
+    MODERATE_THRESHOLD = 40.0   # 40-70% -> MODERATE risk
+                                # < 40%  -> HIGH_RISK
+
+    def __init__(self, gateway=None, router=None):
+        self.gateway = gateway
+        self.router  = router
 
     def analyze(
         self,
         jd_analysis:  JDAnalysis,
         all_scores:   list[CandidateScore],
     ) -> GapReport:
-        """
-        Build a pool-level skill gap report.
-
-        Args:
-            jd_analysis:  Structured JD with required_skills list
-            all_scores:   Scored candidates (all, not just top N)
-
-        Returns:
-            GapReport with per-skill coverage statistics
-        """
         total = len(all_scores)
         if total == 0 or not jd_analysis.required_skills:
             return GapReport(total_candidates=total)
 
-        # Count how many candidates have each required skill
+        # Pure Python calculation
         skill_counts: dict[str, int] = {
             skill: 0 for skill in jd_analysis.required_skills
         }
 
         for candidate_score in all_scores:
-            # Check verification results for each skill
             verif_map = {v.jd_skill: v.status for v in candidate_score.skill_breakdown}
-
-            # Also check semantic skill matches
             match_map = {m.jd_skill: m.matched for m in candidate_score.skill_matches}
 
             for skill in jd_analysis.required_skills:
-                # Has verified evidence OR semantic skill match
                 status  = verif_map.get(skill, None)
                 matched = match_map.get(skill, False)
-
                 has_skill = (
                     status in (
                         VerificationStatus.STRONGLY_SUPPORTED,
@@ -69,15 +60,13 @@ class RequirementGapAnalyzer:
                     )
                     or matched
                 )
-
                 if has_skill:
                     skill_counts[skill] += 1
 
-        # Build SkillGap entries
         skill_gaps = []
         for skill in jd_analysis.required_skills:
-            count   = skill_counts[skill]
-            pct     = (count / total * 100) if total > 0 else 0.0
+            count = skill_counts[skill]
+            pct   = (count / total * 100) if total > 0 else 0.0
 
             if pct >= self.ADEQUATE_THRESHOLD:
                 risk = GapRiskLevel.ADEQUATE
@@ -94,7 +83,7 @@ class RequirementGapAnalyzer:
                 risk_level       = risk,
             ))
 
-        # Sort: high risk first, then by coverage ascending
+        # Sort: high risk first, then lowest percentage
         skill_gaps.sort(key=lambda g: (
             0 if g.risk_level == GapRiskLevel.HIGH_RISK else
             1 if g.risk_level == GapRiskLevel.MODERATE else 2,
@@ -108,15 +97,49 @@ class RequirementGapAnalyzer:
 
         summary = self._generate_summary(skill_gaps, total, high_risk_skills)
 
-        print(f"[GapAnalyzer] {len(high_risk_skills)} high-risk skill gaps "
-              f"in pool of {total} candidates")
+        # Optional Groq narrative explanation
+        if self.gateway and high_risk_skills:
+            try:
+                groq_summary = self._generate_groq_explanation(skill_gaps, total, high_risk_skills)
+                if groq_summary:
+                    summary = groq_summary
+            except Exception as e:
+                print(f"[GapAnalyzer] Groq explanation fallback: {e}")
+
+        print(f"[GapAnalyzer] {len(high_risk_skills)} high-risk skill gaps in pool of {total} candidates")
 
         return GapReport(
-            skill_gaps        = skill_gaps,
-            total_candidates  = total,
-            high_risk_skills  = high_risk_skills,
-            summary           = summary,
+            skill_gaps       = skill_gaps,
+            total_candidates = total,
+            high_risk_skills = high_risk_skills,
+            summary          = summary,
         )
+
+    def _generate_groq_explanation(
+        self,
+        gaps: list[SkillGap],
+        total: int,
+        high_risk_skills: list[str]
+    ) -> str:
+        decision = self.router.route(
+            "explain skill gap analysis",
+            task_type_hint="complex_requirement_gap_reasoning"
+        )
+        gap_lines = [f"- {g.skill}: {g.count_with_skill}/{total} candidates ({g.percentage:.0f}%)" for g in gaps]
+        prompt = (
+            f"Analyze this talent pool requirement coverage for a hiring manager:\n"
+            + "\n".join(gap_lines) + "\n\n"
+            "Provide a 2-sentence executive summary highlighting the most critical skill shortages."
+        )
+        response = self.gateway.call(
+            decision.model,
+            [
+                {"role": "system", "content": "You are a talent acquisition strategist. Be concise and actionable."},
+                {"role": "user", "content": prompt}
+            ],
+            provider=decision.provider
+        )
+        return response.content.strip()
 
     @staticmethod
     def _generate_summary(
@@ -124,7 +147,6 @@ class RequirementGapAnalyzer:
         total:            int,
         high_risk_skills: list[str],
     ) -> str:
-        """Generate a human-readable summary of the gap analysis."""
         if not gaps:
             return "No gap data available."
 
@@ -132,20 +154,15 @@ class RequirementGapAnalyzer:
         moderate = sum(1 for g in gaps if g.risk_level == GapRiskLevel.MODERATE)
         high     = len(high_risk_skills)
 
-        parts = [
-            f"Analyzed {total} candidates across {len(gaps)} required skills."
-        ]
-
+        parts = [f"Analyzed {total} candidates across {len(gaps)} required skills."]
         if adequate > 0:
-            parts.append(f"{adequate} skills have good pool coverage (≥70%).")
+            parts.append(f"{adequate} skills have strong pool coverage (≥70%).")
         if moderate > 0:
             parts.append(f"{moderate} skills have moderate pool coverage (40-70%).")
         if high > 0:
             skills_str = ", ".join(high_risk_skills[:3])
             if len(high_risk_skills) > 3:
                 skills_str += f" and {len(high_risk_skills) - 3} more"
-            parts.append(
-                f"⚠ {high} skills are high-risk gaps (<40% coverage): {skills_str}."
-            )
+            parts.append(f"⚠ Critical shortages identified in {skills_str}.")
 
         return " ".join(parts)

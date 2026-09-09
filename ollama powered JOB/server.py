@@ -58,7 +58,7 @@ from gateway import MultiGateway
 from router  import ModelRouter
 
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
-LOCAL_MODEL    = os.environ.get("LOCAL_MODEL", "qwen3:4b")
+LOCAL_MODEL    = os.environ.get("LOCAL_MODEL", "llama3.2:latest")
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 gateway = MultiGateway(
@@ -429,13 +429,24 @@ def chat():
     if not messages:
         return jsonify({"error": "No messages provided"}), 400
 
-    # Build context from current results
-    context_parts = []
-    if run_id and run_id in _sessions:
+    user_query = messages[-1].get("content", "")
+    session_id = data.get("session_id")
+    if not session_id and run_id and run_id in _sessions:
+        session_id = _sessions[run_id].get("session_id")
+
+    # 1. Retrieve grounded context from SQLite Recruitment Memory
+    context = ""
+    if session_id:
+        try:
+            context = orchestrator.memory.build_recruiter_context(session_id, user_query)
+        except Exception as e:
+            print(f"[Server] SQLite memory retrieval error: {e}")
+
+    # Fallback to in-memory active session if SQLite memory had no entries yet
+    if not context and run_id and run_id in _sessions:
         result = _sessions[run_id].get("result")
         if result and result.ranked_list:
-            # Inject a summary of rankings for context
-            context_parts.append("## Current Screening Results:\n")
+            context_parts = ["## Current Screening Results:\n"]
             jd = result.jd_analysis
             if jd:
                 context_parts.append(
@@ -455,34 +466,32 @@ def chat():
                 ]
                 context_parts.append(
                     f"#{rc.rank} {s.candidate_name} — Score: {s.total_score:.0f}/100\n"
-                    f"  Strong evidence: {', '.join(strong[:5]) or 'None'}\n"
-                    f"  Missing: {', '.join(missing[:5]) or 'None'}\n"
+                    f"  🟢 Strong evidence: {', '.join(strong[:5]) or 'None'}\n"
+                    f"  🔴 Missing: {', '.join(missing[:5]) or 'None'}\n"
                 )
+            context = "".join(context_parts)
 
-            if result.gap_report:
-                context_parts.append("\n### Skill Gaps:\n")
-                for g in result.gap_report.skill_gaps[:8]:
-                    icon = "✓" if g.risk_level.value == "ADEQUATE" else (
-                        "△" if g.risk_level.value == "MODERATE" else "⚠"
-                    )
-                    context_parts.append(
-                        f"  {g.skill}: {g.count_with_skill}/{g.total_candidates} {icon}\n"
-                    )
-
-    context = "".join(context_parts)
-    system  = CHAT_SYSTEM + (f"\n\n{context}" if context else "")
-
-    # Prepare messages for LLM
+    system = CHAT_SYSTEM + (f"\n\n{context}" if context else "")
     llm_messages = [{"role": "system", "content": system}] + messages
 
+    # Route: if comparing or asking why candidate A > candidate B -> Groq, else Llama 3.2
+    is_comparative = any(w in user_query.lower() for w in ["why is", "compare", "above", "better than", "versus", "tradeoff", "trade-off"])
+    task_hint = "complex_comparison" if is_comparative else "chat"
+
     try:
-        decision = router.route(
-            messages[-1].get("content", ""),
-            task_type_hint="chat",
-        )
+        decision = router.route(user_query, task_type_hint=task_hint)
         response = gateway.call(
             decision.model, llm_messages, provider=decision.provider
         )
+
+        # Save to SQLite memory
+        if session_id:
+            try:
+                orchestrator.memory.save_chat_message(session_id, "user", user_query)
+                orchestrator.memory.save_chat_message(session_id, "assistant", response.content, model=response.model)
+            except Exception:
+                pass
+
         return jsonify({
             "content":  response.content,
             "model":    response.model,

@@ -1,141 +1,129 @@
-# ARIA — AI Desktop Assistant
+# ARIA Core — Talent Screening System
 
-A sleek, dark-themed AI assistant powered by **open-source LLMs** via **Ollama** (local, offline inference).
+**ARIA Core** is an evidence-based, explainable candidate screening engine powered by a **Two-Model Architecture** (**Llama 3.2** local GPU + **Groq** cloud API), **PyMuPDF** document processing, **Pydantic** output validation, **deterministic Python scoring**, and **SQLite recruitment memory**.
 
-## 📁 Files
+---
+
+## 🏗️ Architecture
 
 ```
-ai-assistant/
-├── index.html     ← Main UI (open in browser)
-├── style.css      ← Styling
-├── app.js         ← Frontend logic (API calls, chat, tools, memory, settings)
-├── server.py      ← Python Flask backend (proxies Ollama API)
-└── README.md      ← This file
+                          Recruiter / Web UI
+                                  │
+                                  ▼
+                         Flask / REST API
+                                  │
+                       Recruitment Orchestrator
+                                  │
+                            Smart Router
+                           ┌──────┴──────┐
+                           ▼             ▼
+                      Llama 3.2        Groq API
+                      Local GPU         Cloud
+                   (Routine Tasks)  (Complex Reasoning)
+                           │             │
+                           └──────┬──────┘
+                                  ▼
+                        Evidence Verification
+                       (🟢 / 🟡 / 🔴 / ⚪)
+                                  │
+                        Python Ranking Engine
+                    (40% / 25% / 20% / 10% / 5%)
+                                  │
+                      SQLite Recruitment Memory
+                     (Jobs, Candidates, Evidence,
+                        Rankings, Chat History)
+                                  │
+                                  ▼
+                 Grounded Recruiter Chat & Dashboard
 ```
+
+---
+
+## ⚡ Two-Model Architecture & Smart Router
+
+| Backend | Model | Tasks Handled |
+|---|---|---|
+| **Local GPU (Ollama)** | **Llama 3.2** (`llama3.2:latest`) | JD parsing, resume extraction, claim extraction, basic evidence verification, candidate summaries |
+| **Cloud (Groq API)** | **Llama 3.3 70B** (`llama-3.3-70b-versatile`) | Candidate-vs-candidate comparisons, trade-off analysis, complex gap reasoning, nuanced evidence evaluation |
+
+*No need to keep multiple heavy local models loaded in VRAM.*
+
+---
+
+## 🔍 Core Innovations
+
+### 1. Evidence-Based Verification
+Instead of merely asking *"Does Candidate A know Python?"*, ARIA Core evaluates:
+**"What concrete evidence in the candidate's application supports the claim?"**
+- 🟢 **Strongly Supported**: Clear evidence (Certification + Production project / work experience).
+- 🟡 **Partially Supported**: Mentioned only in the Skills section without project/work evidence.
+- 🔴 **Unsupported**: Claimed but contradicted or unevidenced.
+- ⚪ **Not Mentioned**: Skill not present in the candidate application.
+
+### 2. Deterministic Python Ranking Engine
+No LLM hallucination in final numerical ranks:
+- **Required Skills Coverage**: `40%`
+- **Relevant Experience**: `25%`
+- **Evidence Strength**: `20%`
+- **Preferred Skills**: `10%`
+- **Education Match**: `5%`
+
+### 3. Lightweight Pipeline
+- **PyMuPDF (`fitz`)** and **python-docx** for high-performance text extraction without LLM cost.
+- Direct taxonomy & section matching without heavy SentenceTransformers or FAISS overhead.
+- **Pydantic** schema validation (`JDAnalysisSchema`, `ResumeAnalysisSchema`).
+
+### 4. SQLite Recruitment Memory
+All jobs, candidate profiles, evidence verifications, scores, and trade-off notes are persisted in `data/recruitment.db`.
+Recruiters can ask questions in the **Chat Window** (e.g. *"Why is Candidate A ranked above Candidate B?"*) and get instantaneous, grounded responses retrieved directly from memory without re-running the screening pipeline.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install Python dependencies
-
+### 1. Install Dependencies
 ```bash
-pip install flask flask-cors ollama pypdf python-docx vosk flask-sock
+pip install flask flask-cors python-dotenv ollama pymupdf python-docx groq pydantic
 ```
 
-### 2. Install and Start Ollama Services
+### 2. Configure Environment (`.env`)
+```ini
+GROQ_API_KEY=your_groq_api_key_here
+LOCAL_MODEL=llama3.2:latest
+GROQ_MODEL=llama-3.3-70b-versatile
+PORT=5000
+```
 
-1. Install Ollama from [ollama.com](https://ollama.com/download)
-2. Open your CLI / terminal and start the Ollama service:
-   ```bash
-   ollama serve
-   ```
-3. Open another CLI window and pull the LLaMA 3.2 3B parameter model:
-   ```bash
-   ollama pull llama3.2
-   ```
+### 3. Verify Local Ollama Model
+Ensure Ollama is running with Llama 3.2:
+```bash
+ollama pull llama3.2
+```
 
-### 3. Start the backend
+### 4. Run Smoke Tests
+```bash
+python test_recruitment_smoke.py
+```
 
+### 5. Start the Server
 ```bash
 python server.py
 ```
-
-You should see:
-```text
-+--------------------------------------------------+
-|   ARIA v2.0 Backend - Ollama (Local, Offline)    |
-+--------------------------------------------------+
-```
-
-### 4. Build / Open the frontend
-
-Open `index.html` in your browser (double-click it, or use a simple server):
-
-```bash
-# Option A: just open the file
-open index.html   # macOS
-start index.html  # Windows
-
-# Option B: serve locally to avoid CORS on some browsers
-python -m http.server 8080
-# then visit http://localhost:8080
-```
+Open `http://localhost:5000` (or `index.html`) in your browser.
 
 ---
 
-## ✨ Features
+## 🔌 API Endpoints
 
-| Feature | Description |
-|---|---|
-| **Chat** | Full conversation with open-source LLMs, with markdown rendering |
-| **Quick Tools** | Summarize, Translate, Code Review, Grammar Fix, Explain, Brainstorm |
-| **Memory** | Auto-extracts and stores context from conversations |
-| **Settings** | Switch AI models, customize system prompt, accent colors, font size |
-| **Responsive** | Adapts to smaller screen widths |
-
----
-
-## 🤖 Available Models (via Ollama)
-
-| Model | Speed | Best For |
+| Method | Endpoint | Description |
 |---|---|---|
-| **Llama 3.2 3B** | ⚡ Fastest | Balanced local model — good default for voice |
-| **Phi-3 Mini** | Fast | Very lightweight, fastest on CPU-only machines |
-| **Qwen 2.5 3B** | Fast | Small and quick alternative |
-
-All models are **open-source** and run **locally** on your machine.
-
----
-
-## 🔌 API Endpoints (server.py)
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/` | Health check |
-| GET | `/api/health` | Health check JSON |
-| GET | `/api/models` | List available models |
-| POST | `/api/chat` | Chat with AI (full history) |
-| POST | `/api/tool` | One-shot tool prompt |
-
-### POST /api/chat body:
-```json
-{
-  "messages": [{"role": "user", "content": "Hello!"}],
-  "model": "llama3.2",
-  "system": "You are ARIA..."
-}
-```
-
-### GET /api/models response:
-```json
-{
-  "models": [
-    {"id": "llama3.2", "name": "Llama 3.2 3B", "description": "Fast, balanced local model — good default for voice"},
-    ...
-  ]
-}
-```
-
----
-
-## 🎨 Customization
-
-- **AI Model** — choose between Llama 3.2, Phi-3, and Qwen 2.5 in Settings
-- **Accent color** — click color swatches in Settings tab
-- **System prompt** — fully customizable in Settings
-- **Assistant name** — change from ARIA to anything
-
----
-
-## 🔄 Migration from Cloud APIs
-
-This project has been migrated to use **Ollama** with **open-source models** for:
-- **Free access** — no paid API subscriptions needed
-- **Privacy** — everything runs 100% locally
-- **Open source** — all models are fully open-source (Llama, Phi, Qwen)
-
----
-
-Built with HTML, CSS, JavaScript + Python (Flask) · Powered by Ollama + Open-Source LLMs
-# ollama-Aria
+| `GET` | `/api/health` | Server & LLM backend health status |
+| `POST` | `/api/recruitment/upload-jd` | Upload and extract Job Description |
+| `POST` | `/api/recruitment/upload-resumes` | Upload candidate resumes (PDF/DOCX) |
+| `POST` | `/api/recruitment/analyze` | Launch screening pipeline in background |
+| `GET` | `/api/recruitment/status/<run_id>` | Poll screening pipeline progress & logs |
+| `GET` | `/api/recruitment/results/<run_id>` | Retrieve full screening results & rankings |
+| `GET` | `/api/recruitment/candidate/<id>` | Single candidate evidence breakdown |
+| `POST` | `/api/recruitment/compare` | Head-to-head candidate trade-off comparison |
+| `GET` | `/api/recruitment/gaps/<run_id>` | Applicant pool skill gap analytics |
+| `POST` | `/api/chat` | Recruiter Q&A grounded in SQLite memory |

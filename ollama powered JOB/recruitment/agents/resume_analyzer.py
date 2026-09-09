@@ -31,16 +31,18 @@ class ExperienceItemSchema(BaseModel):
 
 class ResumeAnalysisSchema(BaseModel):
     """Pydantic schema to validate candidate resume extraction from Llama 3.2."""
-    name: str = Field(default="Candidate")
+    model_config = {"populate_by_name": True, "extra": "ignore"}
+
+    name: str = Field(default="Candidate", alias="candidate")
     email: str = Field(default="")
     phone: str = Field(default="")
     skills: List[str] = Field(default_factory=list)
-    experience_entries: List[Any] = Field(default_factory=list)
+    experience_entries: List[Any] = Field(default_factory=list, alias="experience")
     total_experience_years: float = Field(default=0.0)
     projects: List[str] = Field(default_factory=list)
     education: List[str] = Field(default_factory=list)
     certifications: List[str] = Field(default_factory=list)
-    raw_claims: List[str] = Field(default_factory=list)
+    raw_claims: List[str] = Field(default_factory=list, alias="claims")
 
     @field_validator("name", mode="before")
     @classmethod

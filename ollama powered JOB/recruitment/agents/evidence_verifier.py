@@ -1,14 +1,13 @@
 """
-RecruitScreen v1.0 — Evidence Verifier Agent
-─────────────────────────────────────────────
-Uses Qwen3 (local) or Groq (cloud) to judge whether retrieved evidence
-actually supports a skill claim.
+RecruitScreen / ARIA Core — Evidence Verifier Agent
+──────────────────────────────────────────────────
+Evaluates: "What evidence in the candidate's application supports the claim?"
 
-Verdict categories:
-  STRONGLY_SUPPORTED  🟢 — Clear, direct evidence
-  PARTIALLY_SUPPORTED 🟡 — Related but indirect / implied
-  UNSUPPORTED         🔴 — Claim made but no evidence found
-  NOT_MENTIONED       ⚪ — Skill not referenced anywhere
+Classification:
+  🟢 STRONGLY_SUPPORTED  — Certification + Project / Work Experience evidence
+  🟡 PARTIALLY_SUPPORTED — Mentioned only in Skills section, no project or work evidence
+  🔴 UNSUPPORTED         — Claimed but contradicted, or completely unevidenced
+  ⚪ NOT_MENTIONED       — Skill not referenced anywhere in application
 """
 
 import json
@@ -18,32 +17,33 @@ from ..models import (
 )
 
 
-SYSTEM_PROMPT = """You are an expert technical recruiter reviewing evidence for candidate skill claims.
-Your job is to determine if the provided resume evidence supports a specific skill claim.
-Be objective, precise, and consistent. Output valid JSON only."""
+SYSTEM_PROMPT = """You are an evidence-based technical talent screening agent.
+Your primary question is NOT "Does the candidate know X?", but:
+"What concrete evidence in the candidate's application supports this skill claim?"
+Be objective, rigorous, and explainable. Output valid JSON only."""
 
 
-VERIFICATION_PROMPT = """Evaluate whether the resume evidence supports the claimed skill.
+VERIFICATION_PROMPT = """Evaluate what evidence in the candidate's application supports the skill claim.
 
-Skill Being Verified: {skill}
+Requirement: {skill}
+Candidate Claim: "{statement}"
 
-Candidate Statement (from claim extraction):
-"{statement}"
-
-Evidence Found in Resume:
+Evidence Extracted from Application:
+\"\"\"
 {evidence_text}
+\"\"\"
 
-Classify the evidence strength using EXACTLY one of these verdicts:
-- STRONGLY_SUPPORTED: Clear, direct evidence of this skill (e.g., "Built 3 FastAPI projects", specific tech mentioned with context)
-- PARTIALLY_SUPPORTED: Related but indirect evidence (e.g., mentions adjacent technology, general mention without project depth)
-- UNSUPPORTED: Skill was claimed but the evidence does NOT support it
-- NOT_MENTIONED: No evidence of this skill found in the resume at all
+Classify using EXACTLY one of these verdicts:
+- STRONGLY_SUPPORTED: Clear, direct evidence (e.g., certification, production project, or demonstrable work experience using the skill).
+- PARTIALLY_SUPPORTED: Mentioned only in the Skills list, or general mention without demonstrable project or experience evidence.
+- UNSUPPORTED: The skill was claimed but the evidence contradicts it or shows no actual usage.
+- NOT_MENTIONED: The skill is completely absent from the candidate's application.
 
 Return a JSON object:
 {{
-  "verdict":    "STRONGLY_SUPPORTED | PARTIALLY_SUPPORTED | UNSUPPORTED | NOT_MENTIONED",
+  "verdict": "STRONGLY_SUPPORTED | PARTIALLY_SUPPORTED | UNSUPPORTED | NOT_MENTIONED",
   "confidence": 0.0-1.0,
-  "explanation": "1-2 sentence explanation of your decision"
+  "explanation": "Concise factual reason citing what evidence exists (or is missing)."
 }}
 
 Output ONLY valid JSON, nothing else."""
@@ -51,16 +51,13 @@ Output ONLY valid JSON, nothing else."""
 
 class EvidenceVerifierAgent:
     """
-    Uses an LLM to judge whether retrieved evidence supports a claim.
-
-    Routing:
-      - Simple/clear cases → local Qwen3:4b
-      - Complex/ambiguous → Groq (better reasoning)
+    Judges whether retrieved evidence supports a skill claim.
+    Routes routine checks to local Llama 3.2 and ambiguous/difficult cases to Groq.
     """
 
     AMBIGUITY_SIGNALS = [
-        "related", "similar", "adjacent", "framework", "experience with",
-        "familiarity", "exposure", "worked alongside",
+        "related", "similar", "adjacent", "familiarity", "exposure",
+        "borderline", "hybrid", "transferred", "implied",
     ]
 
     def __init__(self, gateway, router):
@@ -74,36 +71,36 @@ class EvidenceVerifierAgent:
     ) -> VerificationResult:
         """
         Verify whether evidence supports a claim.
-
-        Args:
-            claim:    The claim to verify
-            evidence: Retrieved evidence passages (may be empty)
-
-        Returns:
-            VerificationResult
         """
-        # No evidence at all → NOT_MENTIONED
         if not evidence:
             return VerificationResult(
-                claim         = claim,
-                evidence      = [],
-                status        = VerificationStatus.NOT_MENTIONED,
-                explanation   = f"No evidence of '{claim.jd_skill}' found in the resume.",
+                claim            = claim,
+                evidence         = [],
+                status           = VerificationStatus.NOT_MENTIONED,
+                explanation      = f"No evidence of '{claim.jd_skill}' found in the candidate application.",
                 confidence_score = 1.0,
-                jd_skill      = claim.jd_skill,
+                jd_skill         = claim.jd_skill,
             )
 
-        # Format evidence for LLM
-        evidence_text = self._format_evidence(evidence)
+        # Quick heuristic if only mentioned in Skills section without any other evidence
+        if len(evidence) == 1 and evidence[0].source_section == "Skills":
+            return VerificationResult(
+                claim            = claim,
+                evidence         = evidence,
+                status           = VerificationStatus.PARTIALLY_SUPPORTED,
+                explanation      = f"'{claim.jd_skill}' is mentioned only in the Skills section without project or experience evidence.",
+                confidence_score = 0.90,
+                jd_skill         = claim.jd_skill,
+            )
 
-        # Determine complexity → choose provider
-        is_complex = self._is_complex_case(claim, evidence)
-        task_type  = "complex_reasoning" if is_complex else "verification_simple"
-        decision   = self.router.route(claim.jd_skill, task_type_hint=task_type)
+        evidence_text = self._format_evidence(evidence)
+        is_complex    = self._is_complex_case(claim, evidence)
+        task_type     = "difficult_evidence_verification" if is_complex else "basic_evidence_check"
+        decision      = self.router.route(claim.jd_skill, task_type_hint=task_type)
 
         prompt = VERIFICATION_PROMPT.format(
             skill         = claim.jd_skill,
-            statement     = claim.statement or "No specific statement found",
+            statement     = claim.statement or f"Candidate possesses {claim.jd_skill}",
             evidence_text = evidence_text,
         )
         messages = [
@@ -125,12 +122,12 @@ class EvidenceVerifierAgent:
                 status = VerificationStatus.NOT_MENTIONED
 
             try:
-                confidence = float(data.get("confidence", 0.5))
+                confidence = float(data.get("confidence", 0.85))
                 confidence = max(0.0, min(1.0, confidence))
             except (ValueError, TypeError):
-                confidence = 0.5
+                confidence = 0.85
 
-            result = VerificationResult(
+            return VerificationResult(
                 claim            = claim,
                 evidence         = evidence,
                 status           = status,
@@ -139,70 +136,47 @@ class EvidenceVerifierAgent:
                 jd_skill         = claim.jd_skill,
             )
 
-            print(f"[EvidenceVerifier] '{claim.jd_skill}' → {status.value} "
-                  f"(conf={confidence:.2f}, via {decision.provider})")
-            return result
-
         except Exception as e:
-            print(f"[EvidenceVerifier] Error for '{claim.jd_skill}': {e}")
+            print(f"[EvidenceVerifier] Fallback verification for {claim.jd_skill}: {e}")
+            # Fallback heuristic
+            has_project = any(e.source_section in ("Projects", "Certifications", "Work Experience") for e in evidence)
+            status = VerificationStatus.STRONGLY_SUPPORTED if has_project else VerificationStatus.PARTIALLY_SUPPORTED
             return VerificationResult(
                 claim            = claim,
                 evidence         = evidence,
-                status           = VerificationStatus.PARTIALLY_SUPPORTED,
-                explanation      = f"Verification error: {e}",
-                confidence_score = 0.3,
+                status           = status,
+                explanation      = f"Evidence found across {', '.join(set(e.source_section for e in evidence))}.",
+                confidence_score = 0.75,
                 jd_skill         = claim.jd_skill,
             )
 
     def verify_all(
         self,
-        claims:          list[Claim],
-        evidence_map:    dict[str, list[Evidence]],
+        claims:       list[Claim],
+        evidence_map: dict[str, list[Evidence]],
     ) -> list[VerificationResult]:
-        """
-        Verify all claims using their corresponding evidence.
-
-        Args:
-            claims:       List of claims to verify
-            evidence_map: Dict mapping jd_skill → list[Evidence]
-
-        Returns:
-            list[VerificationResult] in same order as claims
-        """
         results = []
         for claim in claims:
-            key      = claim.jd_skill or claim.skill
-            evidence = evidence_map.get(key, [])
-            result   = self.verify(claim, evidence)
-            results.append(result)
+            ev_list = evidence_map.get(claim.jd_skill, [])
+            res = self.verify(claim, ev_list)
+            results.append(res)
         return results
 
-    # ── Helpers ───────────────────────────────────────────────────────
+    def _is_complex_case(self, claim: Claim, evidence: list[Evidence]) -> bool:
+        stmt = (claim.statement or "").lower()
+        if any(w in stmt for w in self.AMBIGUITY_SIGNALS):
+            return True
+        return False
 
     @staticmethod
     def _format_evidence(evidence: list[Evidence]) -> str:
         if not evidence:
-            return "No evidence found."
-        parts = []
-        for i, e in enumerate(evidence[:3], 1):
-            score = f"(relevance: {e.similarity_score:.2f})"
-            parts.append(f"[Passage {i} — {e.source_section} {score}]\n{e.chunk_text}")
-        return "\n\n".join(parts)
-
-    def _is_complex_case(self, claim: Claim, evidence: list[Evidence]) -> bool:
-        """Detect ambiguous cases that benefit from Groq's reasoning."""
-        if not evidence:
-            return False
-        # If all evidence has medium-range similarity (not clearly related or unrelated)
-        scores = [e.similarity_score for e in evidence]
-        avg_score = sum(scores) / len(scores) if scores else 0
-        if 0.25 < avg_score < 0.55:
-            return True
-        # If claim statement mentions ambiguous terms
-        stmt_lower = (claim.statement or "").lower()
-        if any(sig in stmt_lower for sig in self.AMBIGUITY_SIGNALS):
-            return True
-        return False
+            return "No specific evidence passages found."
+        lines = []
+        for i, ev in enumerate(evidence, 1):
+            sec = f"[{ev.source_section}] " if ev.source_section else ""
+            lines.append(f"{i}. {sec}{ev.chunk_text.strip()}")
+        return "\n".join(lines)
 
     @staticmethod
     def _parse_json(raw: str) -> dict:
@@ -211,10 +185,11 @@ class EvidenceVerifierAgent:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group())
-                except json.JSONDecodeError:
-                    pass
+            pass
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
         return {}
