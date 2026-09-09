@@ -336,6 +336,32 @@ def get_results(run_id: str):
     return jsonify(result.to_dict())
 
 
+# ─── Latest Completed Screening Result ─────────────────────────────────
+@app.route("/api/recruitment/latest", methods=["GET"])
+def get_latest_result():
+    """Return the most recent completed screening result."""
+    # 1. From active in-memory sessions (latest first)
+    for run_id in reversed(list(_sessions.keys())):
+        session = _sessions[run_id]
+        if session.get("done") and session.get("result"):
+            return jsonify(session["result"].to_dict())
+
+    # 2. Check any session with ranked candidates
+    for run_id, sess in _sessions.items():
+        if sess.get("result") and sess["result"].ranked_list:
+            return jsonify(sess["result"].to_dict())
+
+    # 3. From SQLite Recruitment Memory
+    try:
+        latest_from_db = orchestrator.memory.get_latest_screening_dict()
+        if latest_from_db:
+            return jsonify(latest_from_db)
+    except Exception as e:
+        print(f"[Server] SQLite get_latest_screening_dict error: {e}")
+
+    return jsonify({"error": "No completed screening found", "candidates": []}), 404
+
+
 # ─── Single Candidate Detail ──────────────────────────────────────────
 @app.route("/api/recruitment/candidate/<candidate_id>", methods=["GET"])
 def get_candidate(candidate_id: str):

@@ -26,7 +26,7 @@ class RecruitmentMemory:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+            base_dir = os.path.join(os.path.expanduser("~"), ".recruitscreen")
             os.makedirs(base_dir, exist_ok=True)
             db_path = os.path.join(base_dir, "recruitment.db")
         self.db_path = db_path
@@ -327,7 +327,86 @@ class RecruitmentMemory:
                 f"  🟡 Partial/Skills Only: {', '.join(partial) if partial else 'None'}\n"
                 f"  🔴 Missing/Unsupported: {', '.join(unsupported) if unsupported else 'None'}"
             )
-            if c.get("tradeoff_note"):
-                context_lines.append(f"  Note: {c['tradeoff_note']}")
-
         return "\n".join(context_lines)
+
+    def get_latest_screening_dict(self) -> Optional[dict]:
+        """
+        Reconstructs the full ScreeningResult dictionary from the latest saved SQLite session.
+        """
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT session_id FROM jobs ORDER BY created_at DESC LIMIT 1").fetchone()
+            if not row:
+                return None
+            session_id = row["session_id"]
+
+        job = self.get_job(session_id)
+        candidates_db = self.get_ranked_candidates(session_id)
+        if not candidates_db:
+            return None
+
+        # Build ranked_list candidates
+        ranked_candidates = []
+        for c in candidates_db:
+            cid = c["candidate_id"]
+            verifs_raw = self.get_candidate_verifications(session_id, cid)
+            skill_breakdown = []
+            for v in verifs_raw:
+                skill_breakdown.append({
+                    "jd_skill": v["jd_skill"],
+                    "status": v["status"],
+                    "confidence_score": v["confidence_score"],
+                    "explanation": v["explanation"],
+                    "claim": {"skill": v["jd_skill"], "statement": v["claim_statement"]},
+                    "evidence": v.get("evidence", []),
+                })
+
+            ranked_candidates.append({
+                "rank": c["rank"],
+                "tradeoff_note": c.get("tradeoff_note", ""),
+                "score": {
+                    "candidate_id": cid,
+                    "candidate_name": c["name"],
+                    "total_score": c["total_score"],
+                    "relevant_years": c.get("total_experience_years", 0),
+                    "component_scores": c.get("component_scores", []),
+                    "skill_breakdown": skill_breakdown,
+                    "skill_matches": [],
+                    "profile": {
+                        "name": c["name"],
+                        "email": c.get("email", ""),
+                        "phone": c.get("phone", ""),
+                        "skills": c.get("skills", []),
+                        "projects": c.get("projects", []),
+                        "education": json.loads(c.get("education") or "[]") if isinstance(c.get("education"), str) else c.get("education", []),
+                        "certifications": c.get("certifications", []),
+                        "total_experience_years": c.get("total_experience_years", 0),
+                    }
+                }
+            })
+
+        gap_report = None
+        with self._get_conn() as conn:
+            row_ana = conn.cursor().execute("SELECT gap_report FROM analyses WHERE session_id = ?", (session_id,)).fetchone()
+            if row_ana and row_ana["gap_report"]:
+                try:
+                    gap_report = json.loads(row_ana["gap_report"])
+                except Exception:
+                    pass
+
+        return {
+            "session_id": session_id,
+            "jd_analysis": job,
+            "ranked_list": {
+                "candidates": ranked_candidates,
+                "jd_role": job.get("role_title", "Technical Role") if job else "Technical Role",
+                "total_analyzed": len(ranked_candidates),
+            },
+            "gap_report": gap_report,
+            "pipeline_stage": "complete",
+            "progress_pct": 100.0,
+            "progress_log": [f"[100%] ✓ Screening complete ({len(ranked_candidates)} candidates)"],
+            "total_time_secs": 25.0,
+            "error": None,
+            "candidate_count": len(ranked_candidates),
+        }

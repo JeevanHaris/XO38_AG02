@@ -32,6 +32,7 @@
     compare:       `${API_BASE}/api/recruitment/compare`,
     gaps:          (runId) => `${API_BASE}/api/recruitment/gaps/${encodeURIComponent(runId)}`,
     chat:          `${API_BASE}/api/chat`,
+    latest:        `${API_BASE}/api/recruitment/latest`,
   };
 
   // ─── Application State ─────────────────────────────────────────────────
@@ -167,17 +168,24 @@
   }
 
   dom.navItems.forEach(item => {
-    item.addEventListener('click', () => {
+    item.addEventListener('click', (e) => {
+      if (e && e.preventDefault) e.preventDefault();
       const pageId = item.getAttribute('data-page');
       if (pageId) switchPage(pageId);
     });
   });
 
   if (dom.btnBackToRankings) {
-    dom.btnBackToRankings.addEventListener('click', () => switchPage('rankings'));
+    dom.btnBackToRankings.addEventListener('click', (e) => {
+      if (e && e.preventDefault) e.preventDefault();
+      switchPage('rankings');
+    });
   }
   if (dom.btnViewResults) {
-    dom.btnViewResults.addEventListener('click', () => switchPage('rankings'));
+    dom.btnViewResults.addEventListener('click', (e) => {
+      if (e && e.preventDefault) e.preventDefault();
+      switchPage('rankings');
+    });
   }
 
   // ─── System Health Check ───────────────────────────────────────────────
@@ -336,7 +344,8 @@
   }
 
   // ─── Pipeline Execution & Progress Polling ─────────────────────────────
-  dom.btnStartScreening.addEventListener('click', async () => {
+  dom.btnStartScreening.addEventListener('click', async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
     if (state.isAnalyzing) return;
 
     state.isAnalyzing = true;
@@ -530,6 +539,14 @@
       renderRankings(data);
       populateCompareDropdowns(data);
       renderGapReport(data.gap_report);
+
+      // Save to localStorage so results persist across any reloads
+      saveCurrentState();
+
+      // Automatically transition to Rankings view to display results immediately
+      setTimeout(() => {
+        switchPage('rankings');
+      }, 700);
 
     } catch (err) {
       showToast(err.message, 'error');
@@ -1043,7 +1060,89 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
+  // ─── State Persistence ──────────────────────────────────────────────────
+  function saveCurrentState() {
+    try {
+      if (state.screeningResult) {
+        localStorage.setItem('recruitscreen_saved_state', JSON.stringify({
+          sessionId: state.sessionId,
+          runId: state.runId,
+          screeningResult: state.screeningResult,
+          activeJobTitle: dom.activeJobTitle ? dom.activeJobTitle.textContent : '',
+          activePage: state.activePage,
+        }));
+      }
+    } catch (e) {
+      console.warn('Could not save state to localStorage:', e);
+    }
+  }
+
+  function restoreSavedState() {
+    try {
+      const raw = localStorage.getItem('recruitscreen_saved_state');
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved && saved.screeningResult) {
+        state.screeningResult = saved.screeningResult;
+        state.runId = saved.runId || state.runId;
+        state.sessionId = saved.sessionId || state.sessionId;
+
+        const count = saved.screeningResult.ranked_list?.candidates?.length || 0;
+        if (dom.badgeCandidateCount) dom.badgeCandidateCount.textContent = count;
+
+        if (saved.activeJobTitle && dom.activeJobIndicator) {
+          dom.activeJobTitle.textContent = saved.activeJobTitle;
+          dom.activeJobIndicator.style.display = 'flex';
+        }
+
+        renderRankings(saved.screeningResult);
+        populateCompareDropdowns(saved.screeningResult);
+        renderGapReport(saved.screeningResult.gap_report);
+
+        if (saved.activePage && saved.activePage !== 'workspace') {
+          switchPage(saved.activePage);
+        }
+        console.log('[RecruitScreen] Restored previous screening results from localStorage.');
+      }
+    } catch (e) {
+      console.warn('Could not restore state from localStorage:', e);
+    }
+  }
+
+  async function loadLatestResults() {
+    try {
+      const res = await fetch(ENDPOINTS.latest);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.ranked_list && Array.isArray(data.ranked_list.candidates) && data.ranked_list.candidates.length > 0) {
+        state.screeningResult = data;
+        state.runId = data.session_id || state.runId;
+
+        const count = data.ranked_list.candidates.length;
+        if (dom.badgeCandidateCount) dom.badgeCandidateCount.textContent = count;
+
+        if (data.jd_analysis && data.jd_analysis.role_title && dom.activeJobIndicator) {
+          dom.activeJobTitle.textContent = data.jd_analysis.role_title;
+          dom.activeJobIndicator.style.display = 'flex';
+        }
+
+        renderRankings(data);
+        populateCompareDropdowns(data);
+        renderGapReport(data.gap_report);
+        saveCurrentState();
+
+        // Switch to rankings view so user immediately sees results!
+        switchPage('rankings');
+        showToast(`Loaded ${count} ranked candidates`, 'success');
+      }
+    } catch (e) {
+      console.warn('Could not load latest screening results from server:', e);
+    }
+  }
+
   // ─── Startup Initialization ────────────────────────────────────────────
+  restoreSavedState();
+  loadLatestResults();
   checkSystemHealth();
   setInterval(checkSystemHealth, 5000);
 

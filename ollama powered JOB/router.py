@@ -78,7 +78,7 @@ class ModelRouter:
         groq_enabled:     bool = True,
     ):
         self.local_model      = default_model or os.environ.get("LOCAL_MODEL", "llama3.2:latest")
-        self.groq_model       = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.groq_model       = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
         self.default_model    = self.local_model
         self.default_provider = default_provider
         self.groq_enabled     = groq_enabled

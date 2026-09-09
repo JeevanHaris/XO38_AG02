@@ -154,7 +154,7 @@ class ModelGateway:
 class GroqGateway:
     """Cloud inference via Groq API for complex reasoning tasks."""
 
-    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+    DEFAULT_MODEL = "openai/gpt-oss-120b"
 
     def __init__(self, api_key: str = None, default_model: str = None):
         self.api_key       = api_key or os.environ.get("GROQ_API_KEY", "")
