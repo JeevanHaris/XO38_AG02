@@ -1641,6 +1641,21 @@
   }
 
   // ─── Startup Initialization ────────────────────────────────────────────
+  // Ensure video background autoplays smoothly
+  const bgVideo = document.getElementById('bg-video');
+  if (bgVideo) {
+    bgVideo.muted = true;
+    bgVideo.play().catch(() => {
+      const startVideo = () => {
+        bgVideo.play().catch(() => {});
+        window.removeEventListener('click', startVideo);
+        window.removeEventListener('keydown', startVideo);
+      };
+      window.addEventListener('click', startVideo, { once: true });
+      window.addEventListener('keydown', startVideo, { once: true });
+    });
+  }
+
   restoreSavedState();
   loadLatestResults();
   checkSystemHealth();

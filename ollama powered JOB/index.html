@@ -14,7 +14,15 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- Ambient background -->
+  <!-- Ambient Video Background with Glassmorphism Overlay -->
+  <div class="video-bg-container" aria-hidden="true">
+    <video id="bg-video" class="video-bg" autoplay loop muted playsinline preload="auto">
+      <source src="hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4" type="video/mp4">
+    </video>
+    <div class="video-bg-overlay"></div>
+  </div>
+
+  <!-- Ambient background fallback/glow -->
   <div class="bg-gradient"></div>
   <div class="bg-grid"></div>
 

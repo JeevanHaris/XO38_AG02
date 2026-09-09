@@ -126,6 +126,19 @@ def serve_css():
 def serve_js():
     return send_from_directory(".", "app.js", mimetype="application/javascript")
 
+@app.route("/hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4", methods=["GET"])
+def serve_bg_video():
+    return send_from_directory(".", "hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4", mimetype="video/mp4")
+
+@app.route("/<path:filename>", methods=["GET"])
+def serve_root_asset(filename):
+    if filename.startswith("api/"):
+        return jsonify({"error": "Endpoint not found"}), 404
+    if os.path.isfile(filename):
+        return send_from_directory(".", filename)
+    return jsonify({"error": "File not found"}), 404
+
+
 
 # ─── Upload Job Description ───────────────────────────────────────────
 @app.route("/api/recruitment/upload-jd", methods=["POST"])
