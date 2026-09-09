@@ -104,6 +104,9 @@
     detailContentArea:  document.getElementById('detail-content-area'),
     detailHeaderName:   document.getElementById('detail-header-name'),
     detailHeaderMeta:   document.getElementById('detail-header-meta'),
+    detailCandidateName: document.getElementById('detail-candidate-name'),
+    detailCandidateSub:  document.getElementById('detail-candidate-sub'),
+    detailScoreRing:    document.getElementById('detail-score-ring'),
     detailTotalScore:   document.getElementById('detail-total-score'),
     detailTradeoffNote: document.getElementById('detail-tradeoff-note'),
     scoreCompSkills:    document.getElementById('score-comp-skills'),
@@ -171,7 +174,16 @@
     item.addEventListener('click', (e) => {
       if (e && e.preventDefault) e.preventDefault();
       const pageId = item.getAttribute('data-page');
-      if (pageId) switchPage(pageId);
+      if (pageId) {
+        if (pageId === 'detail' && (!state.selectedCandidateId || (dom.detailContentArea && dom.detailContentArea.classList.contains('hidden')))) {
+          const firstCand = state.screeningResult?.ranked_list?.candidates?.[0];
+          if (firstCand?.score?.candidate_id) {
+            openCandidateDetail(firstCand.score.candidate_id);
+            return;
+          }
+        }
+        switchPage(pageId);
+      }
     });
   });
 
@@ -627,12 +639,20 @@
             <span>${Math.round(s.total_score)}</span>
             <span class="score-ring-label">MATCH</span>
           </div>
-          <button class="btn btn-secondary btn-sm" style="padding: 6px 10px;">
+          <button class="btn btn-secondary btn-sm btn-evidence-trigger" style="padding: 6px 12px; font-weight: 600;">
             Evidence →
           </button>
         </div>
       `;
 
+      // Trigger evidence detail on both button click and card click
+      const evBtn = card.querySelector('.btn-evidence-trigger');
+      if (evBtn) {
+        evBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openCandidateDetail(s.candidate_id);
+        });
+      }
       card.addEventListener('click', () => {
         openCandidateDetail(s.candidate_id);
       });
@@ -672,38 +692,72 @@
   dom.sortCandidateSelect.addEventListener('change', applyRankingsFilterAndSort);
 
   // ─── Render Candidate Detail View ──────────────────────────────────────
-  function openCandidateDetail(candidateId) {
-    if (!state.screeningResult || !state.screeningResult.ranked_list) return;
+  async function openCandidateDetail(candidateId) {
+    let ranked = null;
+
+    if (state.screeningResult && state.screeningResult.ranked_list && Array.isArray(state.screeningResult.ranked_list.candidates)) {
+      ranked = state.screeningResult.ranked_list.candidates.find(
+        c => c.score && c.score.candidate_id === candidateId
+      );
+    }
+
+    // Remote fallback if not found in current client state
+    if (!ranked) {
+      try {
+        const url = `${ENDPOINTS.candidate(candidateId)}?run_id=${encodeURIComponent(state.runId || '')}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          ranked = await res.json();
+        }
+      } catch (err) {
+        console.warn('Could not fetch candidate detail remotely:', err);
+      }
+    }
+
+    if (!ranked || !ranked.score) {
+      showToast('Could not load candidate evidence details', 'error');
+      return;
+    }
 
     state.selectedCandidateId = candidateId;
-    const ranked = state.screeningResult.ranked_list.candidates.find(
-      c => c.score.candidate_id === candidateId
-    );
-
-    if (!ranked) return;
+    const s = ranked.score;
 
     const expYears = (s.profile && s.profile.total_experience_years != null)
       ? s.profile.total_experience_years
       : (s.relevant_years || 0);
 
-    dom.detailEmptyState.classList.add('hidden');
-    dom.detailContentArea.classList.remove('hidden');
+    if (dom.detailEmptyState) dom.detailEmptyState.classList.add('hidden');
+    if (dom.detailContentArea) dom.detailContentArea.classList.remove('hidden');
 
-    dom.detailHeaderName.textContent = s.candidate_name;
-    dom.detailHeaderMeta.textContent = `Rank #${ranked.rank} · ${expYears ? expYears.toFixed(1) + ' Years Experience' : 'Experience detected'} · Score: ${Math.round(s.total_score)}/100`;
-    dom.detailTotalScore.textContent = Math.round(s.total_score);
+    if (dom.detailCandidateName) dom.detailCandidateName.textContent = `${s.candidate_name || 'Candidate'} — Evidence Profile`;
+    if (dom.detailHeaderName) dom.detailHeaderName.textContent = s.candidate_name || 'Candidate';
+    if (dom.detailHeaderMeta) {
+      dom.detailHeaderMeta.textContent = `Rank #${ranked.rank} · ${expYears ? expYears.toFixed(1) + ' Years Experience' : 'Experience detected'} · Match Score: ${Math.round(s.total_score || 0)}/100`;
+    }
+    if (dom.detailTotalScore) dom.detailTotalScore.textContent = Math.round(s.total_score || 0);
 
-    if (ranked.tradeoff_note) {
-      dom.detailTradeoffNote.textContent = `Executive Note: "${ranked.tradeoff_note}"`;
-    } else {
-      dom.detailTradeoffNote.textContent = '';
+    if (dom.detailScoreRing) {
+      let scoreClass = 'score-mid';
+      if ((s.total_score || 0) >= 75) scoreClass = 'score-high';
+      else if ((s.total_score || 0) < 50) scoreClass = 'score-low';
+      dom.detailScoreRing.className = `score-ring ${scoreClass}`;
+    }
+
+    if (dom.detailTradeoffNote) {
+      if (ranked.tradeoff_note) {
+        dom.detailTradeoffNote.textContent = `Executive Note: "${ranked.tradeoff_note}"`;
+        dom.detailTradeoffNote.style.display = 'block';
+      } else {
+        dom.detailTradeoffNote.textContent = '';
+        dom.detailTradeoffNote.style.display = 'none';
+      }
     }
 
     // Component scores
     const compMap = {};
     if (Array.isArray(s.component_scores)) {
       s.component_scores.forEach(c => {
-        const val = c.weighted != null ? c.weighted : (c.score != null ? c.score * (c.weight || 1) : 0);
+        const val = c.weighted != null ? (c.weighted <= 1.0 ? c.weighted * 100 : c.weighted) : (c.score != null ? c.score * (c.weight || 1) * (c.score <= 1.0 ? 100 : 1) : 0);
         if (c.name === 'Required Skills') compMap.required_skills = val;
         else if (c.name === 'Relevant Experience') compMap.relevant_experience = val;
         else if (c.name === 'Evidence Strength') compMap.evidence_strength = val;
@@ -714,11 +768,11 @@
       Object.assign(compMap, s.component_scores);
     }
 
-    dom.scoreCompSkills.textContent = `${(compMap.required_skills || 0).toFixed(1)} / 40`;
-    dom.scoreCompExp.textContent = `${(compMap.relevant_experience || 0).toFixed(1)} / 25`;
-    dom.scoreCompEvidence.textContent = `${(compMap.evidence_strength || 0).toFixed(1)} / 20`;
+    if (dom.scoreCompSkills) dom.scoreCompSkills.textContent = `${(compMap.required_skills || 0).toFixed(1)} / 40`;
+    if (dom.scoreCompExp) dom.scoreCompExp.textContent = `${(compMap.relevant_experience || 0).toFixed(1)} / 25`;
+    if (dom.scoreCompEvidence) dom.scoreCompEvidence.textContent = `${(compMap.evidence_strength || 0).toFixed(1)} / 20`;
     const otherScore = (compMap.preferred_skills || 0) + (compMap.education || 0);
-    dom.scoreCompOther.textContent = `${otherScore.toFixed(1)} / 15`;
+    if (dom.scoreCompOther) dom.scoreCompOther.textContent = `${otherScore.toFixed(1)} / 15`;
 
     // Render skill verifications
     renderSkillVerifications(s.skill_breakdown || []);
@@ -729,7 +783,7 @@
   function renderSkillVerifications(verifications) {
     dom.detailSkillsList.innerHTML = '';
 
-    if (verifications.length === 0) {
+    if (!verifications || verifications.length === 0) {
       dom.detailSkillsList.innerHTML = '<div class="text-sm text-muted p-4">No verified skills recorded.</div>';
       return;
     }
@@ -742,18 +796,21 @@
 
       // Quote / Evidence passage
       let passageHtml = '';
-      if (v.evidence && v.evidence.length > 0) {
+      if (v.evidence && Array.isArray(v.evidence) && v.evidence.length > 0) {
         passageHtml = v.evidence.map(e => `
-          <div class="skill-evidence collapsed" title="Click to expand/collapse full passage">
-            "${escapeHtml(e.chunk_text || '')}"
-            <div class="text-xs text-accent mt-1" style="font-style: italic;">
-              Confidence: ${Math.round((e.similarity_score || 0.8) * 100)}% Match
+          <div class="skill-evidence" title="Click to expand/collapse full passage">
+            <div class="evidence-quote font-mono" style="font-size: 0.78rem; line-height: 1.5; color: var(--text-secondary);">
+              "${escapeHtml(e.chunk_text || '')}"
+            </div>
+            <div class="text-xs text-accent mt-2 flex items-center justify-between" style="font-style: italic;">
+              <span>Match Confidence: ${Math.round(((e.similarity_score != null ? e.similarity_score : 0.8) <= 1 ? (e.similarity_score || 0.8) * 100 : e.similarity_score))}%</span>
+              ${e.source_section ? `<span class="text-muted text-xs font-mono">Source: ${escapeHtml(e.source_section)}</span>` : ''}
             </div>
           </div>
         `).join('');
       } else {
         passageHtml = `
-          <div class="skill-evidence" style="color: var(--text-muted); cursor: default;">
+          <div class="skill-evidence" style="color: var(--text-muted); cursor: default; font-style: italic;">
             No direct textual citation found in resume.
           </div>
         `;
@@ -761,8 +818,9 @@
 
       row.innerHTML = `
         <div>
-          <div class="skill-name">${escapeHtml(v.jd_skill)}</div>
-          <div class="text-xs text-muted mt-1">${escapeHtml(v.explanation || 'Verified via semantic matching and evidence checks.')}</div>
+          <div class="skill-name" style="font-size: 0.95rem; font-weight: 700; color: var(--text-primary);">${escapeHtml(v.jd_skill || 'Skill')}</div>
+          <div class="text-xs text-muted mt-1" style="line-height: 1.4;">${escapeHtml(v.explanation || 'Verified via semantic matching and evidence checks.')}</div>
+          ${v.claim && v.claim.statement ? `<div class="text-xs text-secondary mt-2" style="font-family: var(--font-mono); opacity: 0.8;">Claim: "${escapeHtml(v.claim.statement)}"</div>` : ''}
         </div>
         <div>
           <span class="evidence-badge ${badgeInfo.className}">

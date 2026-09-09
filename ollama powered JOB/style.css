@@ -414,12 +414,30 @@ body {
   border: 3px solid transparent;
   background: linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
               linear-gradient(135deg, var(--accent), var(--emerald)) border-box;
+  z-index: 0;
+}
+.score-ring > * {
+  position: relative;
+  z-index: 1;
 }
 .score-ring-label { font-size: 0.55rem; font-weight: 500; color: var(--text-muted); margin-top: 1px; }
 
-.score-high   .score-ring { color: var(--emerald); }
-.score-mid    .score-ring { color: var(--amber); }
-.score-low    .score-ring { color: var(--red); }
+.score-ring.score-high, .score-high .score-ring { color: var(--emerald); }
+.score-ring.score-mid,  .score-mid  .score-ring { color: var(--amber); }
+.score-ring.score-low,  .score-low  .score-ring { color: var(--red); }
+
+.score-ring.score-high::before {
+  background: linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
+              linear-gradient(135deg, #10b981, #059669) border-box;
+}
+.score-ring.score-mid::before {
+  background: linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
+              linear-gradient(135deg, #f59e0b, #d97706) border-box;
+}
+.score-ring.score-low::before {
+  background: linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
+              linear-gradient(135deg, #ef4444, #dc2626) border-box;
+}
 
 /* ── Candidate Cards ────────────────────────────────────────── */
 .candidate-card {
@@ -477,13 +495,33 @@ body {
 .skill-chip.missing  { background: transparent; color: var(--text-muted); border-style: dashed; }
 
 /* ── Skill Breakdown Table ──────────────────────────────────── */
+.skill-row-header {
+  display: grid;
+  grid-template-columns: 280px 170px 1fr;
+  gap: 16px;
+  padding: 10px 12px;
+  background: var(--bg-deep);
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
 .skill-row {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 280px 170px 1fr;
   align-items: start;
   gap: 16px;
-  padding: 12px 0;
+  padding: 16px 12px;
   border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+.skill-row:hover {
+  background: rgba(255, 255, 255, 0.02);
 }
 .skill-row:last-child { border-bottom: none; }
 .skill-name { font-weight: 600; font-size: 0.875rem; }
@@ -491,9 +529,9 @@ body {
   font-size: 0.78rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   margin-top: 6px;
   cursor: pointer;

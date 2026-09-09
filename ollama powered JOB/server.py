@@ -367,21 +367,37 @@ def get_latest_result():
 def get_candidate(candidate_id: str):
     """Return detailed analysis for a single candidate."""
     run_id = request.args.get("run_id")
-    if not run_id or run_id not in _sessions:
-        return jsonify({"error": "run_id required and must be valid"}), 400
+    result = None
 
-    result = _sessions[run_id].get("result")
-    if not result or not result.ranked_list:
-        return jsonify({"error": "Results not ready"}), 202
+    if run_id and run_id in _sessions:
+        result = _sessions[run_id].get("result")
+    else:
+        # Fallback to the latest active in-memory session with results
+        for sid in reversed(list(_sessions.keys())):
+            sess = _sessions[sid]
+            if sess.get("result") and sess["result"].ranked_list:
+                result = sess["result"]
+                break
 
-    # Find candidate in ranked list
-    for ranked in result.ranked_list.candidates:
-        if ranked.score.candidate_id == candidate_id:
-            return jsonify({
-                "rank":           ranked.rank,
-                "score":          ranked.score.to_dict(),
-                "tradeoff_note":  ranked.tradeoff_note,
-            })
+    # 1. Search in active in-memory result
+    if result and result.ranked_list:
+        for ranked in result.ranked_list.candidates:
+            if ranked.score.candidate_id == candidate_id:
+                return jsonify({
+                    "rank":           ranked.rank,
+                    "score":          ranked.score.to_dict(),
+                    "tradeoff_note":  ranked.tradeoff_note,
+                })
+
+    # 2. Search in SQLite Recruitment Memory
+    try:
+        latest_db = orchestrator.memory.get_latest_screening_dict()
+        if latest_db and "ranked_list" in latest_db and latest_db["ranked_list"]:
+            for c in latest_db["ranked_list"].get("candidates", []):
+                if c.get("score", {}).get("candidate_id") == candidate_id:
+                    return jsonify(c)
+    except Exception as e:
+        print(f"[Server] get_candidate DB fallback error: {e}")
 
     return jsonify({"error": "Candidate not found"}), 404
 
@@ -395,13 +411,19 @@ def compare_candidates():
     id_a    = data.get("candidate_a")
     id_b    = data.get("candidate_b")
 
-    if not all([run_id, id_a, id_b]):
-        return jsonify({"error": "run_id, candidate_a, candidate_b required"}), 400
+    if not all([id_a, id_b]):
+        return jsonify({"error": "candidate_a and candidate_b are required"}), 400
 
-    if run_id not in _sessions:
-        return jsonify({"error": "Unknown run_id"}), 404
+    result = None
+    if run_id and run_id in _sessions:
+        result = _sessions[run_id].get("result")
+    else:
+        for sid in reversed(list(_sessions.keys())):
+            sess = _sessions[sid]
+            if sess.get("result") and sess["result"].ranked_list:
+                result = sess["result"]
+                break
 
-    result = _sessions[run_id].get("result")
     if not result or not result.ranked_list:
         return jsonify({"error": "Results not ready"}), 202
 
