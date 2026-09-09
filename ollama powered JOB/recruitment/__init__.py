@@ -7,6 +7,9 @@ from .models import (
     SkillMatch, CandidateScore, ComponentScore,
     RankedCandidate, RankedList,
     SkillGap, GapReport, GapRiskLevel,
+    ConflictSeverity, RequirementConflict, FeasibilityReport,
+    CoverageEntry, RequirementCoverage,
+    TradeOffCandidate, FeasibilityShortlist,
     ScreeningResult, PipelineStage,
 )
 
@@ -16,5 +19,9 @@ __all__ = [
     "SkillMatch", "CandidateScore", "ComponentScore",
     "RankedCandidate", "RankedList",
     "SkillGap", "GapReport", "GapRiskLevel",
+    "ConflictSeverity", "RequirementConflict", "FeasibilityReport",
+    "CoverageEntry", "RequirementCoverage",
+    "TradeOffCandidate", "FeasibilityShortlist",
     "ScreeningResult", "PipelineStage",
 ]
+

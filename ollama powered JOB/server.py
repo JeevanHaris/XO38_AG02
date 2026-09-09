@@ -171,7 +171,7 @@ def upload_jd():
 # ─── Upload Resumes ───────────────────────────────────────────────────
 @app.route("/api/recruitment/upload-resumes", methods=["POST"])
 def upload_resumes():
-    """Accept multiple resume files for a session."""
+    """Accept multiple resume files for a session, deduplicating by filename."""
     session_id = request.form.get("session_id")
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
@@ -187,7 +187,11 @@ def upload_resumes():
         _upload_store[session_id] = {"jd": None, "resumes": []}
 
     accepted = []
+    updated  = []
     rejected = []
+
+    resumes = _upload_store[session_id]["resumes"]
+    existing_map = {r[0]: idx for idx, r in enumerate(resumes)}
 
     for f in files:
         ok, err = proc.validate_file(f.filename)
@@ -196,17 +200,94 @@ def upload_resumes():
             continue
 
         file_bytes = f.read()
-        _upload_store[session_id]["resumes"].append((f.filename, file_bytes))
-        accepted.append(f.filename)
+        if f.filename in existing_map:
+            # Replace existing file bytes instead of creating duplicate
+            resumes[existing_map[f.filename]] = (f.filename, file_bytes)
+            updated.append(f.filename)
+        else:
+            existing_map[f.filename] = len(resumes)
+            resumes.append((f.filename, file_bytes))
+            accepted.append(f.filename)
 
-    print(f"[Server] Resumes uploaded: {len(accepted)} accepted, "
+    print(f"[Server] Resumes uploaded: {len(accepted)} accepted, {len(updated)} updated, "
           f"{len(rejected)} rejected. session={session_id}")
 
     return jsonify({
         "session_id":    session_id,
         "accepted":      accepted,
+        "updated":       updated,
         "rejected":      rejected,
         "total_resumes": len(_upload_store[session_id]["resumes"]),
+    })
+
+
+# ─── Delete Single Resume ─────────────────────────────────────────────
+@app.route("/api/recruitment/delete-resume", methods=["POST", "DELETE"])
+@app.route("/api/recruitment/resume", methods=["DELETE"])
+def delete_resume():
+    """Remove a single uploaded resume from the session store."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id") or request.args.get("session_id") or request.form.get("session_id")
+    filename   = data.get("filename")   or request.args.get("filename")   or request.form.get("filename")
+
+    if not session_id or not filename:
+        return jsonify({"error": "session_id and filename required"}), 400
+
+    if session_id in _upload_store:
+        resumes = _upload_store[session_id].get("resumes", [])
+        _upload_store[session_id]["resumes"] = [r for r in resumes if r[0] != filename]
+
+    remaining = len(_upload_store.get(session_id, {}).get("resumes", []))
+    print(f"[Server] Resume deleted: {filename} (remaining: {remaining}) session={session_id}")
+
+    return jsonify({
+        "session_id":    session_id,
+        "deleted":       filename,
+        "total_resumes": remaining,
+    })
+
+
+# ─── Clear All Resumes ────────────────────────────────────────────────
+@app.route("/api/recruitment/clear-resumes", methods=["POST", "DELETE"])
+@app.route("/api/recruitment/resumes", methods=["DELETE"])
+def clear_resumes():
+    """Clear all uploaded resumes for a session."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id") or request.args.get("session_id") or request.form.get("session_id")
+
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+
+    if session_id in _upload_store:
+        _upload_store[session_id]["resumes"] = []
+
+    print(f"[Server] All resumes cleared for session={session_id}")
+    return jsonify({
+        "session_id":    session_id,
+        "status":        "cleared",
+        "total_resumes": 0,
+    })
+
+
+# ─── Delete / Remove Job Description ──────────────────────────────────
+@app.route("/api/recruitment/delete-jd", methods=["POST", "DELETE"])
+@app.route("/api/recruitment/jd", methods=["DELETE"])
+def delete_jd():
+    """Clear the uploaded job description for a session."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id") or request.args.get("session_id") or request.form.get("session_id")
+
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+
+    if session_id in _upload_store:
+        _upload_store[session_id]["jd"] = None
+
+    print(f"[Server] JD removed for session={session_id}")
+    return jsonify({
+        "session_id": session_id,
+        "status":     "cleared",
+        "jd":         None,
     })
 
 
@@ -400,6 +481,83 @@ def get_candidate(candidate_id: str):
         print(f"[Server] get_candidate DB fallback error: {e}")
 
     return jsonify({"error": "Candidate not found"}), 404
+
+
+# ─── Delete Candidate from Results ────────────────────────────────────
+@app.route("/api/recruitment/candidate/<candidate_id>", methods=["DELETE"])
+@app.route("/api/recruitment/delete-candidate", methods=["POST", "DELETE"])
+def delete_candidate(candidate_id: str = None):
+    """Delete a candidate from current shortlist results and SQLite memory."""
+    data = request.get_json(silent=True) or {}
+    cand_id = candidate_id or data.get("candidate_id") or request.args.get("candidate_id")
+    run_id  = data.get("run_id") or request.args.get("run_id")
+    session_id = data.get("session_id") or request.args.get("session_id")
+
+    if not cand_id:
+        return jsonify({"error": "candidate_id required"}), 400
+
+    # 1. Remove from in-memory active session(s)
+    remaining_count = 0
+    for sid, sess in list(_sessions.items()):
+        if run_id and sid != run_id:
+            continue
+        res = sess.get("result")
+        if res:
+            if res.candidates:
+                res.candidates = [c for c in res.candidates if c.candidate_id != cand_id]
+            if res.ranked_list and res.ranked_list.candidates:
+                res.ranked_list.candidates = [
+                    rc for rc in res.ranked_list.candidates
+                    if rc.score.candidate_id != cand_id
+                ]
+                # Re-rank remaining candidates
+                for new_rank, rc in enumerate(res.ranked_list.candidates, 1):
+                    rc.rank = new_rank
+                remaining_count = len(res.ranked_list.candidates)
+
+    # 2. Remove from SQLite memory store
+    try:
+        orchestrator.memory.delete_candidate(cand_id, session_id=session_id)
+    except Exception as e:
+        print(f"[Server] SQLite delete_candidate error: {e}")
+
+    print(f"[Server] Candidate deleted: {cand_id} (session={session_id}, remaining={remaining_count})")
+    return jsonify({
+        "status": "deleted",
+        "candidate_id": cand_id,
+        "remaining_candidates": remaining_count,
+    })
+
+
+# ─── Clear All Screening Results ──────────────────────────────────────
+@app.route("/api/recruitment/clear-results", methods=["POST", "DELETE"])
+def clear_results():
+    """Clear screening results from active sessions and persistent SQLite database."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id") or request.args.get("session_id")
+    run_id     = data.get("run_id") or request.args.get("run_id")
+
+    # Clear from in-memory sessions
+    if run_id and run_id in _sessions:
+        del _sessions[run_id]
+    elif not session_id:
+        _sessions.clear()
+    else:
+        to_del = [rid for rid, s in _sessions.items() if s.get("session_id") == session_id]
+        for rid in to_del:
+            del _sessions[rid]
+
+    # Clear from SQLite
+    try:
+        orchestrator.memory.clear_screening(session_id)
+    except Exception as e:
+        print(f"[Server] SQLite clear_screening error: {e}")
+
+    print(f"[Server] Screening results cleared (session={session_id or 'ALL'})")
+    return jsonify({
+        "status": "cleared",
+        "session_id": session_id,
+    })
 
 
 # ─── Compare Two Candidates ───────────────────────────────────────────

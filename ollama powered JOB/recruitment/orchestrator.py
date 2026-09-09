@@ -4,17 +4,21 @@ RecruitScreen / ARIA Core — Recruitment Orchestrator
 Agentic orchestrator coordinating the lean, two-model candidate screening pipeline.
 
 Pipeline:
-  1. Process Documents (PyMuPDF / docx clean text extraction)
-  2. Analyze JD (Llama 3.2 + Pydantic validation)
-  3. Analyze Resumes (Llama 3.2 + Pydantic validation)
-  4. Extract Skill Claims (Llama 3.2)
-  5. Retrieve Evidence (Fast section-aware extraction)
-  6. Verify Evidence (🟢 Strongly Supported, 🟡 Partially Supported, 🔴 Unsupported, ⚪ Not Mentioned)
-  7. Semantic Skill Matching (Taxonomy + normalized matching)
-  8. Calculate Deterministic Scores (Python: 40% Required, 25% Experience, 20% Evidence, 10% Preferred, 5% Education)
-  9. Rank & Compare Top Candidates (Groq trade-off reasoning)
-  10. Identify Skill Gaps (Python pool stats + Groq advisory summary)
-  11. Persist to SQLite Recruitment Memory
+  1.  Process Documents (PyMuPDF / docx clean text extraction)
+  2.  Analyze JD (Llama 3.2 + Pydantic validation)
+  2b. [NEW] Detect Requirement Conflicts (Llama 3.2 -> Groq if ambiguous)
+  3.  Analyze Resumes (Llama 3.2 + Pydantic validation)
+  4.  Extract Skill Claims (Llama 3.2)
+  5.  Retrieve Evidence (Fast section-aware extraction)
+  6.  Verify Evidence (🟢 Strongly Supported, 🟡 Partially Supported, 🔴 Unsupported, ⚪ Not Mentioned)
+  7.  Semantic Skill Matching (Taxonomy + normalized matching)
+  8.  Calculate Deterministic Scores (Python: 40% Required, 25% Experience, 20% Evidence, 10% Preferred, 5% Education)
+  9.  [NEW] Pool Coverage Analysis (Python -- intersection check)
+  10. [NEW] Agentic Fork:
+        intersection > 0 -> Standard Ranking (Groq trade-off, top 2)
+        intersection == 0 -> Trade-Off Shortlist Builder (Groq narratives)
+  11. Identify Skill Gaps (Python pool stats + Groq advisory summary)
+  12. Persist to SQLite Recruitment Memory
 """
 
 import time
@@ -25,16 +29,19 @@ from .models import (
     ScreeningResult, PipelineStage, CandidateProfile,
 )
 from .doc_processor import DocumentProcessor
-from .agents.jd_analyzer        import JDAnalyzerAgent
-from .agents.resume_analyzer    import ResumeAnalyzerAgent
-from .agents.claim_extractor    import ClaimExtractorAgent
-from .agents.evidence_retrieval import EvidenceRetrievalAgent
-from .agents.evidence_verifier  import EvidenceVerifierAgent
-from .agents.skill_matcher      import SemanticSkillMatcher
-from .ranking.scorer            import CandidateScorer
-from .ranking.comparator        import CandidateComparator
-from .ranking.gap_analyzer      import RequirementGapAnalyzer
-from .memory_store              import RecruitmentMemory
+from .agents.jd_analyzer                   import JDAnalyzerAgent
+from .agents.resume_analyzer               import ResumeAnalyzerAgent
+from .agents.claim_extractor               import ClaimExtractorAgent
+from .agents.evidence_retrieval            import EvidenceRetrievalAgent
+from .agents.evidence_verifier             import EvidenceVerifierAgent
+from .agents.skill_matcher                 import SemanticSkillMatcher
+from .agents.requirement_conflict_analyzer import RequirementConflictAnalyzer
+from .ranking.scorer                       import CandidateScorer
+from .ranking.comparator                   import CandidateComparator
+from .ranking.gap_analyzer                 import RequirementGapAnalyzer
+from .ranking.pool_coverage_analyzer       import PoolCoverageAnalyzer
+from .ranking.tradeoff_shortlist_builder   import TradeOffShortlistBuilder
+from .memory_store                         import RecruitmentMemory
 
 
 class RecruitmentOrchestrator:
@@ -48,17 +55,20 @@ class RecruitmentOrchestrator:
         self.router  = router
 
         # Initialize all agents & services
-        self.doc_processor      = DocumentProcessor()
-        self.jd_analyzer        = JDAnalyzerAgent(gateway, router)
-        self.resume_analyzer    = ResumeAnalyzerAgent(gateway, router)
-        self.claim_extractor    = ClaimExtractorAgent(gateway, router)
-        self.evidence_retrieval = EvidenceRetrievalAgent()
-        self.evidence_verifier  = EvidenceVerifierAgent(gateway, router)
-        self.skill_matcher      = SemanticSkillMatcher(gateway, router)
-        self.scorer             = CandidateScorer()
-        self.comparator         = CandidateComparator(gateway, router)
-        self.gap_analyzer       = RequirementGapAnalyzer(gateway, router)
-        self.memory             = RecruitmentMemory(db_path=db_path)
+        self.doc_processor         = DocumentProcessor()
+        self.jd_analyzer           = JDAnalyzerAgent(gateway, router)
+        self.resume_analyzer       = ResumeAnalyzerAgent(gateway, router)
+        self.claim_extractor       = ClaimExtractorAgent(gateway, router)
+        self.evidence_retrieval    = EvidenceRetrievalAgent()
+        self.evidence_verifier     = EvidenceVerifierAgent(gateway, router)
+        self.skill_matcher         = SemanticSkillMatcher(gateway, router)
+        self.conflict_analyzer     = RequirementConflictAnalyzer(gateway, router)
+        self.scorer                = CandidateScorer()
+        self.comparator            = CandidateComparator(gateway, router)
+        self.gap_analyzer          = RequirementGapAnalyzer(gateway, router)
+        self.pool_coverage         = PoolCoverageAnalyzer()
+        self.tradeoff_builder      = TradeOffShortlistBuilder(gateway, router)
+        self.memory                = RecruitmentMemory(db_path=db_path)
 
     def run_screening(
         self,
@@ -96,6 +106,18 @@ class RecruitmentOrchestrator:
                 result.pipeline_stage = PipelineStage.FAILED
                 return result
 
+            # Deduplicate resumes by filename to prevent duplicate candidate evaluations
+            seen_filenames = set()
+            deduped_resumes = []
+            for item in resume_files:
+                fname = item[0]
+                if fname not in seen_filenames:
+                    seen_filenames.add(fname)
+                    deduped_resumes.append(item)
+                else:
+                    print(f"[Orchestrator] Skipped duplicate resume file: {fname}")
+            resume_files = deduped_resumes
+
             resume_docs = self.doc_processor.batch_process_resumes(resume_files)
             valid_resumes = [r for r in resume_docs if not r["error"]]
 
@@ -113,13 +135,29 @@ class RecruitmentOrchestrator:
             result.jd_analysis = jd_analysis
 
             if not jd_analysis.required_skills:
-                update(PipelineStage.ANALYZING_JD, 20,
+                update(PipelineStage.ANALYZING_JD, 18,
                        "⚠ No required skills explicitly extracted. Falling back to key skills.")
             else:
-                update(PipelineStage.ANALYZING_JD, 20,
+                update(PipelineStage.ANALYZING_JD, 18,
                        f"JD analyzed: {jd_analysis.role_title} — "
                        f"{len(jd_analysis.required_skills)} required, "
                        f"{len(jd_analysis.preferred_skills)} preferred skills")
+
+            # ── Stage 2b: Detect Requirement Conflicts [NEW] ──────────
+            update(PipelineStage.FEASIBILITY_ANALYSIS, 20,
+                   "Analyzing JD for internal requirement conflicts...")
+            feasibility_report = self.conflict_analyzer.analyze(jd_analysis)
+            result.feasibility_report = feasibility_report
+            sev = feasibility_report.overall_severity.value
+            n_conflicts = len(feasibility_report.conflicts)
+            if sev == "NONE":
+                update(PipelineStage.FEASIBILITY_ANALYSIS, 22,
+                       "Feasibility check passed: Requirements appear consistent")
+            else:
+                icon = feasibility_report.severity_icon
+                update(PipelineStage.FEASIBILITY_ANALYSIS, 22,
+                       f"{icon} Requirement conflict detected [{sev}]: "
+                       f"{n_conflicts} conflict(s) found")
 
             # ── Stage 3: Analyze Resumes (Llama 3.2 + Pydantic) ───────
             update(PipelineStage.ANALYZING_RESUMES, 22, "Extracting candidate profiles with Llama 3.2...")
@@ -194,7 +232,6 @@ class RecruitmentOrchestrator:
 
             update(PipelineStage.MATCHING_SKILLS, 84, "Semantic skill matching complete")
 
-            # ── Stage 8: Score Candidates (Python Deterministic) ──────
             update(PipelineStage.SCORING, 86, "Calculating deterministic Python scores (40/25/20/10/5)...")
             all_scores = []
 
@@ -211,12 +248,55 @@ class RecruitmentOrchestrator:
 
             update(PipelineStage.SCORING, 90, f"Scored {len(all_scores)} candidates deterministically")
 
-            # ── Stage 9: Rank Candidates & Trade-off Analysis (Groq) ──
-            update(PipelineStage.RANKING, 92, "Ranking candidates & generating Groq trade-off analysis...")
-            ranked_list        = self.comparator.rank(all_scores, jd_analysis)
-            result.ranked_list = ranked_list
-            top_name = ranked_list.candidates[0].score.candidate_name if ranked_list.candidates else "N/A"
-            update(PipelineStage.RANKING, 95, f"Ranking complete. Top candidate: {top_name}")
+            # -- Stage 9: Pool Coverage Analysis (Python) [NEW] -------------
+            update(PipelineStage.POOL_COVERAGE, 91,
+                   f"Calculating requirement coverage across {len(all_scores)} candidates...")
+            coverage = self.pool_coverage.analyze(jd_analysis, all_scores)
+            ic       = coverage.intersection_count
+            total_c  = coverage.total_candidates
+            if ic == 0:
+                update(PipelineStage.POOL_COVERAGE, 92,
+                       f"No candidate satisfies all requirements (0/{total_c}). "
+                       f"Building compromise shortlist...")
+            else:
+                update(PipelineStage.POOL_COVERAGE, 92,
+                       f"{ic}/{total_c} candidates satisfy all requirements. "
+                       f"Proceeding with standard ranking.")
+
+            # -- Stage 10: Agentic Fork [NEW] --------------------------------
+            if ic == 0:
+                # No perfect match -- build trade-off shortlist
+                update(PipelineStage.TRADEOFF_ANALYSIS, 93,
+                       "Building trade-off shortlist with Groq narratives...")
+                tradeoff_shortlist        = self.tradeoff_builder.build(
+                    all_scores, jd_analysis, coverage
+                )
+                result.tradeoff_shortlist = tradeoff_shortlist
+
+                # Still compute standard ranking for score reference
+                ranked_list        = self.comparator.rank(all_scores, jd_analysis)
+                result.ranked_list = ranked_list
+                top_name = (ranked_list.candidates[0].score.candidate_name
+                            if ranked_list.candidates else "N/A")
+                update(PipelineStage.TRADEOFF_ANALYSIS, 95,
+                       f"Trade-off shortlist ready. Closest match: {top_name}")
+            else:
+                # Perfect matches exist -- standard ranking path
+                update(PipelineStage.RANKING, 93,
+                       "Ranking candidates & generating Groq trade-off analysis...")
+                ranked_list        = self.comparator.rank(all_scores, jd_analysis)
+                result.ranked_list = ranked_list
+
+                # Still build shortlist so frontend always has tradeoff data
+                tradeoff_shortlist        = self.tradeoff_builder.build(
+                    all_scores, jd_analysis, coverage
+                )
+                result.tradeoff_shortlist = tradeoff_shortlist
+
+                top_name = (ranked_list.candidates[0].score.candidate_name
+                            if ranked_list.candidates else "N/A")
+                update(PipelineStage.RANKING, 95,
+                       f"Ranking complete. Top candidate: {top_name}")
 
             # ── Stage 10: Requirement Gap Analysis (Python + Groq) ────
             update(PipelineStage.GAP_ANALYSIS, 96, "Calculating requirement gaps across applicant pool...")

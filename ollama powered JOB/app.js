@@ -24,15 +24,20 @@
   const ENDPOINTS = {
     health:        `${API_BASE}/api/health`,
     uploadJd:      `${API_BASE}/api/recruitment/upload-jd`,
+    deleteJd:      `${API_BASE}/api/recruitment/delete-jd`,
     uploadResumes: `${API_BASE}/api/recruitment/upload-resumes`,
+    deleteResume:  `${API_BASE}/api/recruitment/delete-resume`,
+    clearResumes:  `${API_BASE}/api/recruitment/clear-resumes`,
     analyze:       `${API_BASE}/api/recruitment/analyze`,
     status:        (runId) => `${API_BASE}/api/recruitment/status/${encodeURIComponent(runId)}`,
     results:       (runId) => `${API_BASE}/api/recruitment/results/${encodeURIComponent(runId)}`,
     candidate:     (id, runId) => `${API_BASE}/api/recruitment/candidate/${encodeURIComponent(id)}?run_id=${encodeURIComponent(runId)}`,
+    deleteCandidate: `${API_BASE}/api/recruitment/delete-candidate`,
     compare:       `${API_BASE}/api/recruitment/compare`,
     gaps:          (runId) => `${API_BASE}/api/recruitment/gaps/${encodeURIComponent(runId)}`,
     chat:          `${API_BASE}/api/chat`,
     latest:        `${API_BASE}/api/recruitment/latest`,
+    clearResults:  `${API_BASE}/api/recruitment/clear-results`,
   };
 
   // ─── Application State ─────────────────────────────────────────────────
@@ -75,11 +80,13 @@
     jdPreviewName:      document.getElementById('jd-preview-name'),
     jdPreviewStats:     document.getElementById('jd-preview-stats'),
     jdPreviewText:      document.getElementById('jd-preview-text'),
+    btnClearJd:         document.getElementById('btn-clear-jd'),
 
     resumesDropZone:    document.getElementById('resumes-drop-zone'),
     resumesFileInput:   document.getElementById('resumes-file-input'),
     resumesCountBadge:  document.getElementById('resumes-count-badge'),
     resumesFileList:    document.getElementById('resumes-file-list'),
+    btnClearResumes:    document.getElementById('btn-clear-resumes'),
 
     btnStartScreening:  document.getElementById('btn-start-screening'),
     pipelineCard:       document.getElementById('pipeline-progress-card'),
@@ -95,9 +102,26 @@
     statTopScore:       document.getElementById('stat-top-score'),
     statAvgScore:       document.getElementById('stat-avg-score'),
     statVerifiedClaims: document.getElementById('stat-verified-claims'),
+    rankingsContainer:  document.getElementById('rankings-container'),
     filterCandidateInput: document.getElementById('filter-candidate-input'),
     sortCandidateSelect:  document.getElementById('sort-candidate-select'),
-    rankingsContainer:  document.getElementById('rankings-container'),
+    btnClearResults:    document.getElementById('btn-clear-results'),
+    // Feasibility Panel
+    feasibilityPanel:         document.getElementById('feasibility-panel'),
+    feasibilityIcon:          document.getElementById('feasibility-icon'),
+    feasibilitySubtitle:      document.getElementById('feasibility-subtitle'),
+    feasibilitySeverityBadge: document.getElementById('feasibility-severity-badge'),
+    feasibilityConflicts:     document.getElementById('feasibility-conflicts'),
+    feasibilityConflictList:  document.getElementById('feasibility-conflict-list'),
+    feasibilityAdvisory:      document.getElementById('feasibility-advisory'),
+    coverageBarsContainer:    document.getElementById('coverage-bars-container'),
+    coverageCandidateCount:   document.getElementById('coverage-candidate-count'),
+    coverageIntersection:     document.getElementById('coverage-intersection'),
+    intersectionIcon:         document.getElementById('intersection-icon'),
+    intersectionCountText:    document.getElementById('intersection-count-text'),
+    // Trade-Off Shortlist
+    tradeoffShortlistSection: document.getElementById('tradeoff-shortlist-section'),
+    tradeoffCardsContainer:   document.getElementById('tradeoff-cards-container'),
 
     // Detail
     detailEmptyState:   document.getElementById('detail-empty-state'),
@@ -285,6 +309,9 @@
       dom.jdPreviewStats.textContent = `${data.word_count || 0} words · ${(data.char_count || 0).toLocaleString()} chars`;
       dom.jdPreviewText.textContent = data.preview || '';
 
+      // Show Remove JD button
+      if (dom.btnClearJd) dom.btnClearJd.style.display = 'inline-flex';
+
       // Update Topbar Active Job Indicator
       dom.activeJobIndicator.style.display = 'inline-flex';
       dom.activeJobTitle.textContent = data.filename.replace(/\.[^/.]+$/, '');
@@ -298,20 +325,65 @@
     }
   });
 
+  // Remove JD Handler
+  if (dom.btnClearJd) {
+    dom.btnClearJd.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      try {
+        await fetch(ENDPOINTS.deleteJd, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: state.sessionId }),
+        });
+
+        state.jdFile = null;
+        dom.jdDropZone.classList.remove('uploaded');
+        dom.jdStatusTag.textContent = 'Awaiting Upload';
+        dom.jdStatusTag.className = 'status-badge';
+        dom.jdPreviewBox.classList.add('hidden');
+        dom.jdFileInput.value = '';
+        dom.btnClearJd.style.display = 'none';
+
+        if (dom.activeJobIndicator) dom.activeJobIndicator.style.display = 'none';
+
+        checkScreeningReadiness();
+        showToast('Job Description removed', 'info');
+      } catch (err) {
+        showToast(`Failed to remove JD: ${err.message}`, 'error');
+      }
+    });
+  }
+
   // ─── Resumes Batch Upload Handling ─────────────────────────────────────
   initDropZone(dom.resumesDropZone, dom.resumesFileInput, async (files) => {
     if (!files || files.length === 0) return;
 
-    const newFiles = Array.from(files);
-    state.resumesList.push(...newFiles);
+    const incoming = Array.from(files);
+    let replacedCount = 0;
+    let addedCount = 0;
+
+    // Deduplicate incoming files against state.resumesList by filename
+    incoming.forEach(newFile => {
+      const existingIdx = state.resumesList.findIndex(f => f.name === newFile.name);
+      if (existingIdx >= 0) {
+        state.resumesList[existingIdx] = newFile;
+        replacedCount++;
+      } else {
+        state.resumesList.push(newFile);
+        addedCount++;
+      }
+    });
 
     dom.resumesCountBadge.textContent = `${state.resumesList.length} files`;
     dom.resumesDropZone.classList.add('uploaded');
+    if (dom.btnClearResumes) dom.btnClearResumes.style.display = 'inline-flex';
 
     // Send files to backend
     const formData = new FormData();
     formData.append('session_id', state.sessionId);
-    newFiles.forEach(f => formData.append('files', f));
+    incoming.forEach(f => formData.append('files', f));
 
     try {
       const res = await fetch(ENDPOINTS.uploadResumes, {
@@ -325,7 +397,14 @@
       // Update UI File List
       renderResumesList();
 
-      showToast(`${data.accepted.length} resumes uploaded successfully`, 'success');
+      if (replacedCount > 0 && addedCount > 0) {
+        showToast(`${addedCount} new resume(s) uploaded, ${replacedCount} updated`, 'success');
+      } else if (replacedCount > 0) {
+        showToast(`Updated ${replacedCount} existing resume(s)`, 'info');
+      } else {
+        showToast(`${data.accepted.length} resume(s) uploaded successfully`, 'success');
+      }
+
       if (data.rejected && data.rejected.length > 0) {
         showToast(`${data.rejected.length} files rejected (invalid format)`, 'error');
       }
@@ -338,15 +417,94 @@
 
   function renderResumesList() {
     dom.resumesFileList.innerHTML = '';
+    const hasResumes = state.resumesList.length > 0;
+
+    if (dom.btnClearResumes) {
+      dom.btnClearResumes.style.display = hasResumes ? 'inline-flex' : 'none';
+    }
+
+    if (!hasResumes) {
+      dom.resumesDropZone.classList.remove('uploaded');
+      dom.resumesCountBadge.textContent = '0 files';
+      return;
+    }
+
     state.resumesList.forEach((f, idx) => {
       const item = document.createElement('div');
       item.className = 'upload-file-item';
       item.innerHTML = `
         <span class="file-icon">📄</span>
-        <span class="truncate" style="flex: 1;">${escapeHtml(f.name)}</span>
+        <span class="truncate" style="flex: 1;" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
         <span class="text-xs font-mono text-muted">${formatBytes(f.size)}</span>
+        <button class="btn-file-delete" type="button" title="Delete ${escapeHtml(f.name)}" data-filename="${escapeHtml(f.name)}">
+          ✕
+        </button>
       `;
+
+      const deleteBtn = item.querySelector('.btn-file-delete');
+      if (deleteBtn) {
+        deleteBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          await removeResumeFile(f.name, item);
+        });
+      }
+
       dom.resumesFileList.appendChild(item);
+    });
+  }
+
+  async function removeResumeFile(filename, itemElement) {
+    try {
+      if (itemElement) itemElement.classList.add('deleting');
+
+      // Call backend to delete from session store
+      await fetch(ENDPOINTS.deleteResume, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: state.sessionId, filename }),
+      });
+
+      // Remove from local state
+      state.resumesList = state.resumesList.filter(f => f.name !== filename);
+      dom.resumesCountBadge.textContent = `${state.resumesList.length} files`;
+
+      setTimeout(() => {
+        renderResumesList();
+        checkScreeningReadiness();
+      }, 200);
+
+      showToast(`Removed resume: ${filename}`, 'info');
+    } catch (err) {
+      showToast(`Failed to delete resume: ${err.message}`, 'error');
+      renderResumesList();
+    }
+  }
+
+  // Clear All Resumes Handler
+  if (dom.btnClearResumes) {
+    dom.btnClearResumes.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!confirm('Are you sure you want to remove all uploaded resumes?')) return;
+
+      try {
+        await fetch(ENDPOINTS.clearResumes, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: state.sessionId }),
+        });
+
+        state.resumesList = [];
+        dom.resumesCountBadge.textContent = '0 files';
+        dom.resumesDropZone.classList.remove('uploaded');
+        if (dom.resumesFileInput) dom.resumesFileInput.value = '';
+        renderResumesList();
+        checkScreeningReadiness();
+        showToast('All uploaded resumes cleared', 'info');
+      } catch (err) {
+        showToast(`Failed to clear resumes: ${err.message}`, 'error');
+      }
     });
   }
 
@@ -453,12 +611,14 @@
   const STAGE_ORDER = [
     'document_ingestion',
     'jd_analysis',
+    'feasibility_analysis',
     'resume_parsing',
     'claim_extraction',
     'evidence_retrieval',
     'evidence_verification',
     'skill_matching',
     'scoring',
+    'pool_coverage',
     'ranking',
     'gap_analysis',
   ];
@@ -466,14 +626,17 @@
   const STAGE_MAP = {
     'document_ingestion':    'stage-doc',
     'jd_analysis':           'stage-jd',
+    'feasibility_analysis':  'stage-feasibility',
     'resume_parsing':        'stage-resumes',
     'claim_extraction':      'stage-claims',
     'evidence_retrieval':    'stage-retrieval',
     'evidence_verification': 'stage-verification',
     'skill_matching':        'stage-matching',
     'scoring':               'stage-scoring',
+    'pool_coverage':         'stage-pool-coverage',
     'ranking':               'stage-ranking',
     'gap_analysis':          'stage-gaps',
+    'tradeoff_analysis':     'stage-ranking',
     'completed':             'stage-gaps',
   };
 
@@ -519,6 +682,7 @@
       div.className = 'log-line';
       if (line.includes('✓') || line.includes('Complete') || line.includes('Done')) div.classList.add('success');
       if (line.includes('✗') || line.includes('Error') || line.includes('Failed')) div.classList.add('error');
+      if (line.includes('conflict') || line.includes('Conflict') || line.includes('⚠')) div.classList.add('warning');
       div.textContent = line;
       dom.progressLog.appendChild(div);
     });
@@ -552,6 +716,10 @@
       populateCompareDropdowns(data);
       renderGapReport(data.gap_report);
 
+      // Render new feasibility views
+      renderFeasibilityPanel(data.feasibility_report);
+      renderTradeOffShortlist(data.tradeoff_shortlist);
+
       // Save to localStorage so results persist across any reloads
       saveCurrentState();
 
@@ -563,6 +731,160 @@
     } catch (err) {
       showToast(err.message, 'error');
     }
+  }
+
+  // ─── Feasibility Panel Renderer ──────────────────────────────────────────
+  function renderFeasibilityPanel(report) {
+    if (!report || !dom.feasibilityPanel) return;
+
+    const sev    = (report.overall_severity || 'NONE').toUpperCase();
+    const icon   = report.severity_icon || '✅';
+    const panel  = dom.feasibilityPanel;
+
+    // Show panel
+    panel.classList.remove('hidden', 'severity-none', 'severity-moderate', 'severity-high');
+    panel.classList.add(`severity-${sev.toLowerCase()}`);
+
+    // Icon & severity badge
+    dom.feasibilityIcon.textContent   = icon;
+    dom.feasibilitySeverityBadge.textContent = sev === 'NONE' ? 'NO CONFLICT'
+      : sev === 'MODERATE' ? '⚠ MODERATE CONFLICT'
+      : '🚨 HIGH CONFLICT';
+    dom.feasibilitySeverityBadge.className = `conflict-badge badge-${sev.toLowerCase()}`;
+
+    // Subtitle
+    const n = (report.conflicts || []).length;
+    dom.feasibilitySubtitle.textContent = sev === 'NONE'
+      ? 'Requirements appear consistent'
+      : `${n} requirement conflict${n !== 1 ? 's' : ''} detected`;
+
+    // Conflict rows
+    const conflicts = report.conflicts || [];
+    if (conflicts.length > 0 && dom.feasibilityConflicts) {
+      dom.feasibilityConflicts.classList.remove('hidden');
+      dom.feasibilityConflictList.innerHTML = conflicts.map(c => {
+        const rowSev = (c.severity || 'moderate').toLowerCase();
+        const rowIcon = rowSev === 'high' ? '🚨' : '⚠️';
+        return `
+          <div class="conflict-row severity-${rowSev}">
+            <span class="conflict-row-icon">${rowIcon}</span>
+            <div class="conflict-row-body">
+              <div class="conflict-reqs">
+                ${escapeHtml(c.requirement_a)} — ${escapeHtml(c.requirement_b)}
+              </div>
+              <div class="conflict-explanation">${escapeHtml(c.explanation)}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Advisory text
+    if (dom.feasibilityAdvisory) {
+      dom.feasibilityAdvisory.textContent = report.recruiter_advisory || '';
+    }
+  }
+
+  function renderCoverageBars(coverage) {
+    if (!coverage || !dom.coverageBarsContainer) return;
+
+    const total   = coverage.total_candidates || 0;
+    const entries = coverage.entries || [];
+    if (!entries.length) return;
+
+    // Show candidate count
+    if (dom.coverageCandidateCount) {
+      dom.coverageCandidateCount.textContent = `${total} candidate${total !== 1 ? 's' : ''} evaluated`;
+    }
+
+    dom.coverageBarsContainer.innerHTML = entries.map(e => {
+      const pct      = e.percentage || 0;
+      let fillClass  = pct >= 70 ? 'adequate' : pct >= 40 ? 'moderate' : 'low';
+      return `
+        <div class="coverage-bar-row">
+          <span class="coverage-bar-label" title="${escapeHtml(e.requirement)}">${escapeHtml(e.requirement)}</span>
+          <div class="coverage-bar-track">
+            <div class="coverage-bar-fill ${fillClass}" style="width:0%" data-pct="${pct}"></div>
+          </div>
+          <span class="coverage-bar-pct">${pct.toFixed(0)}%</span>
+          <span class="coverage-bar-count">${e.count}/${e.total}</span>
+        </div>
+      `;
+    }).join('');
+
+    // Animate bars after insertion
+    requestAnimationFrame(() => {
+      dom.coverageBarsContainer.querySelectorAll('.coverage-bar-fill').forEach(bar => {
+        bar.style.width = bar.dataset.pct + '%';
+      });
+    });
+
+    // Intersection row
+    const ic = coverage.intersection_count || 0;
+    if (dom.coverageIntersection) {
+      dom.coverageIntersection.classList.remove('hidden');
+      dom.coverageIntersection.classList.toggle('match-exists', ic > 0);
+      dom.intersectionIcon.textContent       = ic > 0 ? '✅' : '⚠️';
+      dom.intersectionCountText.textContent  = `${ic} / ${total}`;
+    }
+  }
+
+  // ─── Trade-Off Shortlist Renderer ─────────────────────────────────────────
+  function renderTradeOffShortlist(shortlist) {
+    if (!shortlist || !dom.tradeoffShortlistSection) return;
+
+    const hasPerfect = shortlist.has_perfect_match;
+    const allCands   = [...(shortlist.perfect_matches || []),
+                       ...(shortlist.compromise_candidates || [])];
+
+    // Render coverage bars (always, if coverage data present)
+    if (shortlist.coverage) {
+      renderCoverageBars(shortlist.coverage);
+    }
+
+    // Only show the trade-off section when there are NO perfect matches
+    if (hasPerfect || allCands.length === 0) {
+      dom.tradeoffShortlistSection.classList.add('hidden');
+      return;
+    }
+
+    dom.tradeoffShortlistSection.classList.remove('hidden');
+
+    const medals = ['🥇', '🥈', '🥉'];
+    const labels  = ['Closest Overall Fit', 'Strong Alternative', 'Specialized Alternative', 'Alternative'];
+
+    dom.tradeoffCardsContainer.innerHTML = allCands.map((tc, idx) => {
+      const medal = medals[idx] || `#${tc.rank}`;
+      const label = labels[Math.min(idx, labels.length - 1)];
+
+      const metTags     = (tc.met     || []).map(r =>
+        `<span class="req-tag req-met">✅ ${escapeHtml(r)}</span>`).join('');
+      const partialTags = (tc.partial || []).map(r =>
+        `<span class="req-tag req-partial">🟡 ${escapeHtml(r)}</span>`).join('');
+      const unmetTags   = (tc.unmet   || []).map(r =>
+        `<span class="req-tag req-unmet">❌ ${escapeHtml(r)}</span>`).join('');
+
+      const narrativeHtml = tc.tradeoff_note
+        ? `<div class="tradeoff-narrative">${escapeHtml(tc.tradeoff_note)}</div>`
+        : '';
+
+      return `
+        <div class="tradeoff-card" style="animation-delay:${idx * 0.08}s">
+          <div class="tradeoff-card-header">
+            <span class="tradeoff-rank-medal">${medal}</span>
+            <div>
+              <div class="tradeoff-candidate-name">${escapeHtml(tc.candidate_name)}</div>
+              <div class="tradeoff-compromise-label">${label} · ${tc.unmet_count} unmet requirement${tc.unmet_count !== 1 ? 's' : ''}</div>
+            </div>
+            <span class="tradeoff-score-badge">${Math.round(tc.total_score)}%</span>
+          </div>
+          <div class="tradeoff-requirements">
+            ${metTags}${partialTags}${unmetTags}
+          </div>
+          ${narrativeHtml}
+        </div>
+      `;
+    }).join('');
   }
 
   // ─── Render Rankings View ──────────────────────────────────────────────
@@ -642,10 +964,13 @@
           <button class="btn btn-secondary btn-sm btn-evidence-trigger" style="padding: 6px 12px; font-weight: 600;">
             Evidence →
           </button>
+          <button class="btn-candidate-delete" title="Remove candidate from shortlist" data-id="${s.candidate_id}">
+            🗑️
+          </button>
         </div>
       `;
 
-      // Trigger evidence detail on both button click and card click
+      // Trigger evidence detail on button click
       const evBtn = card.querySelector('.btn-evidence-trigger');
       if (evBtn) {
         evBtn.addEventListener('click', (e) => {
@@ -653,11 +978,124 @@
           openCandidateDetail(s.candidate_id);
         });
       }
+
+      // Trigger candidate deletion
+      const delBtn = card.querySelector('.btn-candidate-delete');
+      if (delBtn) {
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          await removeCandidate(s.candidate_id, s.candidate_name, card);
+        });
+      }
+
       card.addEventListener('click', () => {
         openCandidateDetail(s.candidate_id);
       });
 
       dom.rankingsContainer.appendChild(card);
+    });
+  }
+
+  async function removeCandidate(candidateId, candidateName, cardElement) {
+    if (!confirm(`Remove ${candidateName} from candidate rankings?`)) return;
+
+    try {
+      if (cardElement) cardElement.style.opacity = '0.3';
+
+      await fetch(ENDPOINTS.deleteCandidate, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          candidate_id: candidateId,
+          session_id: state.sessionId,
+          run_id: state.runId,
+        }),
+      });
+
+      if (state.screeningResult?.ranked_list?.candidates) {
+        state.screeningResult.ranked_list.candidates = state.screeningResult.ranked_list.candidates
+          .filter(c => c.score.candidate_id !== candidateId)
+          .map((c, i) => {
+            c.rank = i + 1;
+            return c;
+          });
+
+        if (state.screeningResult.candidates) {
+          state.screeningResult.candidates = state.screeningResult.candidates
+            .filter(c => c.candidate_id !== candidateId);
+        }
+
+        const count = state.screeningResult.ranked_list.candidates.length;
+        if (dom.badgeCandidateCount) dom.badgeCandidateCount.textContent = count;
+
+        renderRankings(state.screeningResult);
+        populateCompareDropdowns(state.screeningResult);
+        saveCurrentState();
+
+        if (state.selectedCandidateId === candidateId) {
+          state.selectedCandidateId = null;
+          if (dom.detailContentArea) dom.detailContentArea.classList.add('hidden');
+          if (dom.detailEmptyState) dom.detailEmptyState.classList.remove('hidden');
+        }
+      }
+
+      showToast(`Removed candidate: ${candidateName}`, 'info');
+    } catch (err) {
+      showToast(`Failed to remove candidate: ${err.message}`, 'error');
+      if (cardElement) cardElement.style.opacity = '1';
+    }
+  }
+
+  // Clear Results Handler
+  if (dom.btnClearResults) {
+    dom.btnClearResults.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!confirm('Are you sure you want to clear all screening results?')) return;
+
+      try {
+        await fetch(ENDPOINTS.clearResults, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: state.sessionId,
+            run_id: state.runId,
+          }),
+        });
+
+        state.screeningResult = null;
+        state.runId = null;
+        state.selectedCandidateId = null;
+        localStorage.removeItem('recruitscreen_saved_state');
+
+        if (dom.badgeCandidateCount) dom.badgeCandidateCount.textContent = '0';
+        dom.statTotalCandidates.textContent = '0';
+        dom.statTopScore.textContent = '0%';
+        dom.statAvgScore.textContent = '0%';
+        dom.statVerifiedClaims.textContent = '0';
+
+        dom.rankingsContainer.innerHTML = `
+          <div class="card text-center text-muted" style="padding: 48px 24px;">
+            Screening results cleared. Upload documents in the Workspace tab and start screening.
+          </div>
+        `;
+
+        if (dom.detailContentArea) dom.detailContentArea.classList.add('hidden');
+        if (dom.detailEmptyState) dom.detailEmptyState.classList.remove('hidden');
+        if (dom.pipelineCard) dom.pipelineCard.classList.add('hidden');
+
+        if (dom.compareSelectA) dom.compareSelectA.innerHTML = '<option value="">Select Candidate A...</option>';
+        if (dom.compareSelectB) dom.compareSelectB.innerHTML = '<option value="">Select Candidate B...</option>';
+        if (dom.compareNarrativeCard) dom.compareNarrativeCard.classList.add('hidden');
+        if (dom.compareTableContainer) dom.compareTableContainer.classList.add('hidden');
+        if (dom.feasibilityPanel) dom.feasibilityPanel.classList.add('hidden');
+        if (dom.tradeoffShortlistSection) dom.tradeoffShortlistSection.classList.add('hidden');
+
+        showToast('Screening results cleared', 'info');
+      } catch (err) {
+        showToast(`Failed to clear results: ${err.message}`, 'error');
+      }
     });
   }
 
@@ -1156,6 +1594,8 @@
         renderRankings(saved.screeningResult);
         populateCompareDropdowns(saved.screeningResult);
         renderGapReport(saved.screeningResult.gap_report);
+        renderFeasibilityPanel(saved.screeningResult.feasibility_report);
+        renderTradeOffShortlist(saved.screeningResult.tradeoff_shortlist);
 
         if (saved.activePage && saved.activePage !== 'workspace') {
           switchPage(saved.activePage);
@@ -1187,6 +1627,8 @@
         renderRankings(data);
         populateCompareDropdowns(data);
         renderGapReport(data.gap_report);
+        renderFeasibilityPanel(data.feasibility_report);
+        renderTradeOffShortlist(data.tradeoff_shortlist);
         saveCurrentState();
 
         // Switch to rankings view so user immediately sees results!

@@ -283,12 +283,62 @@ body {
 .upload-file-list { margin-top: 12px; text-align: left; }
 .upload-file-item {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; border-radius: var(--radius-sm);
+  padding: 7px 12px; border-radius: var(--radius-sm);
   background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
   font-size: 0.78rem; color: var(--text-secondary);
   margin-top: 4px;
+  transition: all 0.25s var(--ease);
+}
+.upload-file-item:hover {
+  background: rgba(255,255,255,0.07);
+  border-color: var(--border-mid);
+}
+.upload-file-item.deleting {
+  opacity: 0;
+  transform: translateX(24px);
 }
 .upload-file-item .file-icon { color: var(--accent-light); }
+.btn-file-delete {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-left: 4px;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+.btn-file-delete:hover {
+  background: var(--red-dim);
+  color: var(--red);
+  transform: scale(1.1);
+}
+.btn-candidate-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--red);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  transition: all 0.2s ease;
+}
+.btn-candidate-delete:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
+  transform: translateY(-1px);
+}
 
 /* ── Buttons ────────────────────────────────────────────────── */
 .btn {
@@ -320,9 +370,13 @@ body {
 .btn-ghost { background: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { background: var(--accent-dim); color: var(--accent-light); }
 
+.btn-xs { padding: 3px 9px; font-size: 0.72rem; }
 .btn-sm { padding: 6px 14px; font-size: 0.78rem; }
 .btn-lg { padding: 14px 28px; font-size: 1rem; }
 .btn-full { width: 100%; justify-content: center; }
+
+.text-red { color: var(--red) !important; }
+.text-red:hover { color: #f87171 !important; }
 
 .btn-icon { padding: 8px; }
 
@@ -849,6 +903,7 @@ body {
 }
 .section-title { font-size: 0.875rem; font-weight: 700; color: var(--text-primary); }
 
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
@@ -856,4 +911,347 @@ body {
   .stats-strip { grid-template-columns: 1fr 1fr; }
   .workspace-grid { grid-template-columns: 1fr; }
   .gap-row { grid-template-columns: 120px 1fr 60px 70px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   REQUIREMENT FEASIBILITY ENGINE — Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Feasibility Panel Container ────────────────────────────── */
+.feasibility-panel {
+  border-radius: var(--radius-lg);
+  border: 1.5px solid rgba(99, 102, 241, 0.25);
+  background: var(--bg-card);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  transition: border-color 0.3s ease;
+  animation: fadeInUp 0.4s ease both;
+}
+
+.feasibility-panel.severity-moderate {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(245,158,11,0.04) 100%);
+}
+
+.feasibility-panel.severity-high {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(239,68,68,0.05) 100%);
+}
+
+.feasibility-panel.severity-none {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(16,185,129,0.03) 100%);
+}
+
+.feasibility-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.feasibility-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.feasibility-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.feasibility-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 0;
+}
+
+.feasibility-advisory {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.feasibility-coverage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ── Conflict Badge ─────────────────────────────────────────── */
+.conflict-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1.5px solid;
+  white-space: nowrap;
+}
+
+.badge-none {
+  color: var(--emerald);
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.badge-moderate {
+  color: var(--amber);
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.badge-high {
+  color: var(--red);
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+  animation: pulse-red 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+  50% { box-shadow: 0 0 0 4px rgba(239,68,68,0.12); }
+}
+
+/* ── Conflict Detail Row ────────────────────────────────────── */
+.conflict-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+}
+
+.conflict-row.severity-high {
+  background: rgba(239,68,68,0.06);
+  border-color: rgba(239,68,68,0.2);
+}
+
+.conflict-row.severity-moderate {
+  background: rgba(245,158,11,0.06);
+  border-color: rgba(245,158,11,0.2);
+}
+
+.conflict-row-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.conflict-row-body {
+  flex: 1;
+}
+
+.conflict-reqs {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.conflict-explanation {
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+/* ── Coverage Bar ───────────────────────────────────────────── */
+.coverage-bar-row {
+  display: grid;
+  grid-template-columns: 180px 1fr 55px 60px;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 0.8rem;
+}
+
+.coverage-bar-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coverage-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+  position: relative;
+}
+
+.coverage-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s cubic-bezier(0.16,1,0.3,1);
+  width: 0%;
+}
+
+.coverage-bar-fill.adequate  { background: var(--emerald); }
+.coverage-bar-fill.moderate  { background: var(--amber); }
+.coverage-bar-fill.low       { background: var(--red); }
+
+.coverage-bar-pct {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.coverage-bar-count {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+/* ── Intersection Row ───────────────────────────────────────── */
+.coverage-intersection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid rgba(245,158,11,0.3);
+  background: rgba(245,158,11,0.06);
+  margin-top: 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.coverage-intersection.match-exists {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.intersection-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.intersection-count {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--amber);
+}
+
+.coverage-intersection.match-exists .intersection-count {
+  color: var(--emerald);
+}
+
+/* ── Trade-Off Shortlist Cards ──────────────────────────────── */
+.tradeoff-card {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  transition: border-color 0.2s, transform 0.2s;
+  animation: fadeInUp 0.4s ease both;
+  cursor: default;
+}
+
+.tradeoff-card:hover {
+  border-color: var(--border-bright);
+  transform: translateY(-1px);
+}
+
+.tradeoff-card-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.tradeoff-rank-medal {
+  font-size: 1.8rem;
+  flex-shrink: 0;
+}
+
+.tradeoff-candidate-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.tradeoff-compromise-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
+.tradeoff-score-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border-mid);
+  color: var(--accent-light);
+}
+
+/* Requirement tags inside trade-off card */
+.tradeoff-requirements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.req-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.req-tag.req-met {
+  color: var(--emerald);
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.req-tag.req-partial {
+  color: var(--amber);
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.req-tag.req-unmet {
+  color: var(--red);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.tradeoff-narrative {
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--border-mid);
+  background: rgba(255,255,255,0.025);
+  font-style: italic;
 }

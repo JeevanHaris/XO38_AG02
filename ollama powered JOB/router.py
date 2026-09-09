@@ -32,6 +32,7 @@ LLAMA_ROUTINE_TASKS = {
     "candidate_summaries",
     "extraction",
     "verification_simple",
+    "requirement_conflict_detection",
     "chat",
 }
 
@@ -40,6 +41,8 @@ GROQ_COMPLEX_TASKS = {
     "complex_comparison",
     "tradeoff_analysis",
     "complex_requirement_gap_reasoning",
+    "requirement_conflict_ambiguous",
+    "tradeoff_narrative",
     "final_explanation",
     "complex_explanation",
     "comparison",

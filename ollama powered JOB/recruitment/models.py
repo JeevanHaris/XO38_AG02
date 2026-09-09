@@ -34,20 +34,28 @@ class GapRiskLevel(str, Enum):
     MODERATE  = "MODERATE"   # 40-70%
     HIGH_RISK = "HIGH_RISK"  # < 40%
 
+class ConflictSeverity(str, Enum):
+    NONE     = "NONE"      # Requirements are consistent
+    MODERATE = "MODERATE"  # Restrictive combination — significantly shrinks pool
+    HIGH     = "HIGH"      # Logically contradictory (e.g. 10yr exp + Junior)
+
 class PipelineStage(str, Enum):
-    IDLE              = "idle"
-    PROCESSING_DOCS   = "processing_documents"
-    ANALYZING_JD      = "analyzing_jd"
-    ANALYZING_RESUMES = "analyzing_resumes"
-    EXTRACTING_CLAIMS = "extracting_claims"
-    RETRIEVING_EVIDENCE = "retrieving_evidence"
-    VERIFYING_EVIDENCE  = "verifying_evidence"
-    MATCHING_SKILLS     = "matching_skills"
-    SCORING             = "scoring"
-    RANKING             = "ranking"
-    GAP_ANALYSIS        = "gap_analysis"
-    COMPLETE            = "complete"
-    FAILED              = "failed"
+    IDLE                 = "idle"
+    PROCESSING_DOCS      = "processing_documents"
+    ANALYZING_JD         = "analyzing_jd"
+    FEASIBILITY_ANALYSIS = "feasibility_analysis"
+    ANALYZING_RESUMES    = "analyzing_resumes"
+    EXTRACTING_CLAIMS    = "extracting_claims"
+    RETRIEVING_EVIDENCE  = "retrieving_evidence"
+    VERIFYING_EVIDENCE   = "verifying_evidence"
+    MATCHING_SKILLS      = "matching_skills"
+    SCORING              = "scoring"
+    POOL_COVERAGE        = "pool_coverage"
+    RANKING              = "ranking"
+    TRADEOFF_ANALYSIS    = "tradeoff_analysis"
+    GAP_ANALYSIS         = "gap_analysis"
+    COMPLETE             = "complete"
+    FAILED               = "failed"
 
 
 # ─── JD Analysis ──────────────────────────────────────────────────────
@@ -346,32 +354,166 @@ class GapReport:
         }
 
 
+# ─── Requirement Feasibility Engine ─────────────────────────────────
+
+@dataclass
+class RequirementConflict:
+    """A single detected conflict within the JD requirements."""
+    requirement_a:  str               = ""    # First conflicting requirement
+    requirement_b:  str               = ""    # Second (or compound) requirement
+    severity:       ConflictSeverity  = ConflictSeverity.NONE
+    explanation:    str               = ""    # Human-readable reason
+
+    def to_dict(self) -> dict:
+        return {
+            "requirement_a": self.requirement_a,
+            "requirement_b": self.requirement_b,
+            "severity":      self.severity.value,
+            "explanation":   self.explanation,
+        }
+
+
+@dataclass
+class FeasibilityReport:
+    """Self-conflict analysis of a job requisition."""
+    conflicts:           list[RequirementConflict] = field(default_factory=list)
+    overall_severity:    ConflictSeverity          = ConflictSeverity.NONE
+    recruiter_advisory:  str                       = ""
+    analyzed_at_stage:   str                       = "post_jd_analysis"
+
+    @property
+    def severity_icon(self) -> str:
+        return {"NONE": "✅", "MODERATE": "⚠️", "HIGH": "🚨"}.get(
+            self.overall_severity.value, "⚠️"
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "conflicts":          [c.to_dict() for c in self.conflicts],
+            "overall_severity":   self.overall_severity.value,
+            "severity_icon":      self.severity_icon,
+            "recruiter_advisory": self.recruiter_advisory,
+        }
+
+
+@dataclass
+class CoverageEntry:
+    """Pool coverage for a single requirement."""
+    requirement:   str   = ""
+    count:         int   = 0    # Candidates meeting this requirement
+    total:         int   = 0    # Total candidates evaluated
+    percentage:    float = 0.0
+    bar:           str   = ""   # ASCII-art progress bar for display
+
+    def to_dict(self) -> dict:
+        return {
+            "requirement": self.requirement,
+            "count":       self.count,
+            "total":       self.total,
+            "percentage":  round(self.percentage, 1),
+            "bar":         self.bar,
+        }
+
+
+@dataclass
+class RequirementCoverage:
+    """Pure-Python pool coverage analysis across all JD requirements."""
+    entries:            list[CoverageEntry]  = field(default_factory=list)
+    intersection_count: int                  = 0   # Candidates satisfying ALL requirements
+    intersection_pct:   float               = 0.0
+    total_candidates:   int                  = 0
+    has_perfect_match:  bool                 = False
+
+    def to_dict(self) -> dict:
+        return {
+            "entries":            [e.to_dict() for e in self.entries],
+            "intersection_count": self.intersection_count,
+            "intersection_pct":   round(self.intersection_pct, 1),
+            "total_candidates":   self.total_candidates,
+            "has_perfect_match":  self.has_perfect_match,
+        }
+
+
+@dataclass
+class TradeOffCandidate:
+    """A candidate in the compromise shortlist, annotated with met/unmet requirements."""
+    rank:             int        = 0
+    candidate_id:     str        = ""
+    candidate_name:   str        = ""
+    total_score:      float      = 0.0
+    met:              list[str]  = field(default_factory=list)   # ✅ requirements met
+    partial:          list[str]  = field(default_factory=list)   # 🟡 partially met
+    unmet:            list[str]  = field(default_factory=list)   # ❌ not met
+    unmet_count:      int        = 0
+    compromise_score: float      = 0.0  # 0.0 = perfect match, 1.0 = all unmet
+    tradeoff_note:    str        = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "rank":             self.rank,
+            "candidate_id":     self.candidate_id,
+            "candidate_name":   self.candidate_name,
+            "total_score":      round(self.total_score, 1),
+            "met":              self.met,
+            "partial":          self.partial,
+            "unmet":            self.unmet,
+            "unmet_count":      self.unmet_count,
+            "compromise_score": round(self.compromise_score, 3),
+            "tradeoff_note":    self.tradeoff_note,
+        }
+
+
+@dataclass
+class FeasibilityShortlist:
+    """Compromise-aware shortlist — the primary output when intersection_count == 0."""
+    has_perfect_match:     bool                  = False
+    perfect_matches:       list[TradeOffCandidate] = field(default_factory=list)
+    compromise_candidates: list[TradeOffCandidate] = field(default_factory=list)
+    intersection_count:    int                   = 0
+    total_candidates:      int                   = 0
+    coverage:              Optional[RequirementCoverage] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "has_perfect_match":     self.has_perfect_match,
+            "perfect_matches":       [c.to_dict() for c in self.perfect_matches],
+            "compromise_candidates": [c.to_dict() for c in self.compromise_candidates],
+            "intersection_count":    self.intersection_count,
+            "total_candidates":      self.total_candidates,
+            "coverage":              self.coverage.to_dict() if self.coverage else None,
+        }
+
+
 # ─── Full Screening Result ────────────────────────────────────────────
 
 @dataclass
 class ScreeningResult:
     """Complete output of the RecruitmentOrchestrator pipeline."""
-    session_id:      str                          = ""
-    jd_analysis:     Optional[JDAnalysis]         = None
-    candidates:      list[CandidateProfile]       = field(default_factory=list)
-    ranked_list:     Optional[RankedList]         = None
-    gap_report:      Optional[GapReport]          = None
-    pipeline_stage:  PipelineStage                = PipelineStage.IDLE
-    progress_pct:    float                        = 0.0
-    progress_log:    list[str]                    = field(default_factory=list)
-    total_time_secs: float                        = 0.0
-    error:           Optional[str]                = None
+    session_id:          str                            = ""
+    jd_analysis:         Optional[JDAnalysis]           = None
+    candidates:          list[CandidateProfile]         = field(default_factory=list)
+    ranked_list:         Optional[RankedList]           = None
+    gap_report:          Optional[GapReport]            = None
+    feasibility_report:  Optional[FeasibilityReport]    = None
+    tradeoff_shortlist:  Optional[FeasibilityShortlist] = None
+    pipeline_stage:      PipelineStage                  = PipelineStage.IDLE
+    progress_pct:        float                          = 0.0
+    progress_log:        list[str]                      = field(default_factory=list)
+    total_time_secs:     float                          = 0.0
+    error:               Optional[str]                  = None
 
     def to_dict(self) -> dict:
         return {
-            "session_id":      self.session_id,
-            "jd_analysis":     self.jd_analysis.to_dict() if self.jd_analysis else None,
-            "ranked_list":     self.ranked_list.to_dict() if self.ranked_list else None,
-            "gap_report":      self.gap_report.to_dict() if self.gap_report else None,
-            "pipeline_stage":  self.pipeline_stage.value,
-            "progress_pct":    round(self.progress_pct, 1),
-            "progress_log":    self.progress_log,
-            "total_time_secs": round(self.total_time_secs, 2),
-            "error":           self.error,
-            "candidate_count": len(self.candidates),
+            "session_id":         self.session_id,
+            "jd_analysis":        self.jd_analysis.to_dict() if self.jd_analysis else None,
+            "ranked_list":        self.ranked_list.to_dict() if self.ranked_list else None,
+            "gap_report":         self.gap_report.to_dict() if self.gap_report else None,
+            "feasibility_report": self.feasibility_report.to_dict() if self.feasibility_report else None,
+            "tradeoff_shortlist": self.tradeoff_shortlist.to_dict() if self.tradeoff_shortlist else None,
+            "pipeline_stage":     self.pipeline_stage.value,
+            "progress_pct":       round(self.progress_pct, 1),
+            "progress_log":       self.progress_log,
+            "total_time_secs":    round(self.total_time_secs, 2),
+            "error":              self.error,
+            "candidate_count":    len(self.candidates),
         }

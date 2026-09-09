@@ -115,9 +115,21 @@ class RecruitmentMemory:
                 gap_report TEXT,
                 summary TEXT,
                 total_candidates INTEGER,
+                feasibility_report TEXT,
+                tradeoff_shortlist TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """)
+
+            # Ensure columns exist if table was created in an earlier version
+            try:
+                cursor.execute("ALTER TABLE analyses ADD COLUMN feasibility_report TEXT")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE analyses ADD COLUMN tradeoff_shortlist TEXT")
+            except Exception:
+                pass
 
             # 6. Chat History
             cursor.execute("""
@@ -140,6 +152,11 @@ class RecruitmentMemory:
 
         with self._get_conn() as conn:
             cursor = conn.cursor()
+
+            # Clear any previous candidate/ranking/verification data for this session to prevent duplicates
+            cursor.execute("DELETE FROM verifications WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM rankings WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM candidates WHERE session_id = ?", (session_id,))
 
             # Save Job
             if result.jd_analysis:
@@ -218,17 +235,25 @@ class RecruitmentMemory:
                             json.dumps([e.to_dict() for e in v.evidence]),
                         ))
 
-            # Save Gap Analysis
-            if result.gap_report:
+            # Save Analyses (Gaps & Feasibility)
+            feasibility_json = json.dumps(result.feasibility_report.to_dict()) if result.feasibility_report else None
+            tradeoff_json = json.dumps(result.tradeoff_shortlist.to_dict()) if result.tradeoff_shortlist else None
+            gap_json = json.dumps(result.gap_report.to_dict()) if result.gap_report else None
+            summary = result.gap_report.summary if result.gap_report else ""
+            total_cand = result.gap_report.total_candidates if result.gap_report else len(result.candidates)
+
+            if gap_json or feasibility_json or tradeoff_json:
                 cursor.execute("""
                 INSERT OR REPLACE INTO analyses
-                (session_id, gap_report, summary, total_candidates)
-                VALUES (?, ?, ?, ?)
+                (session_id, gap_report, summary, total_candidates, feasibility_report, tradeoff_shortlist)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     session_id,
-                    json.dumps(result.gap_report.to_dict()),
-                    result.gap_report.summary,
-                    result.gap_report.total_candidates,
+                    gap_json,
+                    summary,
+                    total_cand,
+                    feasibility_json,
+                    tradeoff_json,
                 ))
 
             conn.commit()
@@ -386,13 +411,26 @@ class RecruitmentMemory:
             })
 
         gap_report = None
+        feasibility_report = None
+        tradeoff_shortlist = None
         with self._get_conn() as conn:
-            row_ana = conn.cursor().execute("SELECT gap_report FROM analyses WHERE session_id = ?", (session_id,)).fetchone()
-            if row_ana and row_ana["gap_report"]:
-                try:
-                    gap_report = json.loads(row_ana["gap_report"])
-                except Exception:
-                    pass
+            row_ana = conn.cursor().execute("SELECT gap_report, feasibility_report, tradeoff_shortlist FROM analyses WHERE session_id = ?", (session_id,)).fetchone()
+            if row_ana:
+                if row_ana["gap_report"]:
+                    try:
+                        gap_report = json.loads(row_ana["gap_report"])
+                    except Exception:
+                        pass
+                if row_ana["feasibility_report"]:
+                    try:
+                        feasibility_report = json.loads(row_ana["feasibility_report"])
+                    except Exception:
+                        pass
+                if row_ana["tradeoff_shortlist"]:
+                    try:
+                        tradeoff_shortlist = json.loads(row_ana["tradeoff_shortlist"])
+                    except Exception:
+                        pass
 
         return {
             "session_id": session_id,
@@ -403,6 +441,8 @@ class RecruitmentMemory:
                 "total_analyzed": len(ranked_candidates),
             },
             "gap_report": gap_report,
+            "feasibility_report": feasibility_report,
+            "tradeoff_shortlist": tradeoff_shortlist,
             "pipeline_stage": "complete",
             "progress_pct": 100.0,
             "progress_log": [f"[100%] ✓ Screening complete ({len(ranked_candidates)} candidates)"],
@@ -410,3 +450,50 @@ class RecruitmentMemory:
             "error": None,
             "candidate_count": len(ranked_candidates),
         }
+
+    def delete_candidate(self, candidate_id: str, session_id: str = None) -> bool:
+        """Deletes a candidate and their verifications and rankings from SQLite memory."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if session_id:
+                cursor.execute("DELETE FROM candidates WHERE candidate_id = ? AND session_id = ?", (candidate_id, session_id))
+                cursor.execute("DELETE FROM rankings WHERE candidate_id = ? AND session_id = ?", (candidate_id, session_id))
+                cursor.execute("DELETE FROM verifications WHERE candidate_id = ? AND session_id = ?", (candidate_id, session_id))
+                # Re-rank remaining candidates for this session
+                rows = cursor.execute(
+                    "SELECT candidate_id FROM rankings WHERE session_id = ? ORDER BY total_score DESC",
+                    (session_id,)
+                ).fetchall()
+                for new_rank, row in enumerate(rows, 1):
+                    cursor.execute(
+                        "UPDATE rankings SET rank = ? WHERE session_id = ? AND candidate_id = ?",
+                        (new_rank, session_id, row["candidate_id"])
+                    )
+            else:
+                cursor.execute("DELETE FROM candidates WHERE candidate_id = ?", (candidate_id,))
+                cursor.execute("DELETE FROM rankings WHERE candidate_id = ?", (candidate_id,))
+                cursor.execute("DELETE FROM verifications WHERE candidate_id = ?", (candidate_id,))
+            conn.commit()
+            print(f"[RecruitmentMemory] Deleted candidate {candidate_id} (session={session_id})")
+            return True
+
+    def clear_screening(self, session_id: str = None):
+        """Clears screening data for a specific session or all sessions."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if session_id:
+                cursor.execute("DELETE FROM jobs WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM candidates WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM rankings WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM verifications WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM analyses WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM chat_history WHERE session_id = ?", (session_id,))
+            else:
+                cursor.execute("DELETE FROM jobs")
+                cursor.execute("DELETE FROM candidates")
+                cursor.execute("DELETE FROM rankings")
+                cursor.execute("DELETE FROM verifications")
+                cursor.execute("DELETE FROM analyses")
+                cursor.execute("DELETE FROM chat_history")
+            conn.commit()
+            print(f"[RecruitmentMemory] Cleared screening memory for session: {session_id or 'ALL'}")

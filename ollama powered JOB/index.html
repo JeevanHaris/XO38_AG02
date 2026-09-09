@@ -100,7 +100,10 @@
             <div class="card">
               <div class="section-header">
                 <span class="section-title">1. Job Description (JD)</span>
-                <span id="jd-status-tag" class="status-badge" style="font-size:0.68rem;">Awaiting Upload</span>
+                <div class="flex items-center gap-2">
+                  <span id="jd-status-tag" class="status-badge" style="font-size:0.68rem;">Awaiting Upload</span>
+                  <button id="btn-clear-jd" class="btn btn-secondary btn-xs" style="display: none; padding: 3px 8px; font-size: 0.7rem;" title="Remove Job Description">Remove</button>
+                </div>
               </div>
               <div class="upload-zone" id="jd-drop-zone">
                 <input type="file" id="jd-file-input" accept=".pdf,.docx,.txt" />
@@ -121,16 +124,21 @@
             <!-- Resumes Batch Upload Card -->
             <div class="card">
               <div class="section-header">
-                <span class="section-title">2. Candidate Resumes (Batch)</span>
-                <span id="resumes-count-badge" class="nav-badge">0 files</span>
+                <div class="flex items-center gap-2">
+                  <span class="section-title">2. Candidate Resumes (Batch)</span>
+                  <span id="resumes-count-badge" class="nav-badge">0 files</span>
+                </div>
+                <button id="btn-clear-resumes" class="btn btn-secondary btn-xs text-red" style="display: none; padding: 3px 9px; font-size: 0.72rem;" title="Clear all uploaded resumes">
+                  Clear All
+                </button>
               </div>
               <div class="upload-zone" id="resumes-drop-zone">
                 <input type="file" id="resumes-file-input" accept=".pdf,.docx,.txt" multiple />
                 <div class="upload-icon">👥</div>
                 <div class="upload-title">Drop candidate resumes here</div>
                 <div class="upload-sub">Select multiple PDF, DOCX, or TXT files</div>
-                <div id="resumes-file-list" class="upload-file-list"></div>
               </div>
+              <div id="resumes-file-list" class="upload-file-list mt-3"></div>
             </div>
           </div>
 
@@ -161,15 +169,17 @@
             <!-- Pipeline Visual Stages -->
             <div class="pipeline-stages mb-4" id="pipeline-visual-stages">
               <div class="pipeline-stage" id="stage-doc" title="Document Ingestion">1. Ingest</div>
-              <div class="pipeline-stage" id="stage-jd" title="JD Requirement Extraction">2. JD Analyze</div>
+              <div class="pipeline-stage" id="stage-jd" title="JD Requirement Extraction">2. JD</div>
+              <div class="pipeline-stage" id="stage-feasibility" title="Requirement Conflict Detection">2b. Conflicts</div>
               <div class="pipeline-stage" id="stage-resumes" title="Resume Parsing">3. Resumes</div>
               <div class="pipeline-stage" id="stage-claims" title="Claim Extraction">4. Claims</div>
               <div class="pipeline-stage" id="stage-retrieval" title="FAISS Evidence Retrieval">5. Evidence</div>
               <div class="pipeline-stage" id="stage-verification" title="LLM Evidence Verification">6. Verify</div>
               <div class="pipeline-stage" id="stage-matching" title="Semantic Skill Matching">7. Match</div>
               <div class="pipeline-stage" id="stage-scoring" title="Deterministic Scoring">8. Score</div>
-              <div class="pipeline-stage" id="stage-ranking" title="Ranking & Tradeoffs">9. Rank</div>
-              <div class="pipeline-stage" id="stage-gaps" title="Pool Gap Analysis">10. Gaps</div>
+              <div class="pipeline-stage" id="stage-pool-coverage" title="Pool Coverage Analysis">9. Coverage</div>
+              <div class="pipeline-stage" id="stage-ranking" title="Ranking &amp; Trade-offs">10. Shortlist</div>
+              <div class="pipeline-stage" id="stage-gaps" title="Pool Gap Analysis">11. Gaps</div>
             </div>
 
             <div class="progress-bar-wrap mb-4">
@@ -194,11 +204,52 @@
       <!-- ── PAGE 2: RANKINGS ─────────────────────────────────────────── -->
       <section id="page-rankings" class="page">
         <div class="page-header">
-          <h1 class="page-title">Candidate Rankings</h1>
-          <p class="page-subtitle">Ranked shortlists with deterministic score components and evidence verification badges.</p>
+          <h1 class="page-title">Candidate Shortlist</h1>
+          <p class="page-subtitle">Requirement feasibility analysis, pool coverage, and compromise-aware shortlist.</p>
         </div>
 
         <div class="page-body">
+          <!-- ── Feasibility Panel ─────────────────────────────────────── -->
+          <div id="feasibility-panel" class="feasibility-panel hidden">
+            <div class="feasibility-header">
+              <div class="flex items-center gap-3">
+                <span class="feasibility-icon" id="feasibility-icon">✅</span>
+                <div>
+                  <div class="feasibility-title">Requisition Feasibility Analysis</div>
+                  <div class="text-xs text-muted" id="feasibility-subtitle">Requirements are consistent</div>
+                </div>
+              </div>
+              <span id="feasibility-severity-badge" class="conflict-badge badge-none">NO CONFLICT</span>
+            </div>
+
+            <!-- Conflict details -->
+            <div id="feasibility-conflicts" class="hidden">
+              <div class="feasibility-divider"></div>
+              <div id="feasibility-conflict-list"><!-- injected --></div>
+            </div>
+
+            <!-- Recruiter advisory -->
+            <div class="feasibility-divider"></div>
+            <div class="feasibility-advisory" id="feasibility-advisory"></div>
+
+            <!-- Pool Coverage Bars -->
+            <div class="feasibility-divider"></div>
+            <div class="feasibility-coverage-header">
+              <span>POOL COVERAGE</span>
+              <span class="text-xs text-muted" id="coverage-candidate-count"></span>
+            </div>
+            <div id="coverage-bars-container" class="flex flex-col gap-2 mt-2"></div>
+
+            <!-- Intersection Result -->
+            <div id="coverage-intersection" class="coverage-intersection hidden">
+              <div class="intersection-label">
+                <span id="intersection-icon">⚠️</span>
+                ALL REQUIREMENTS TOGETHER
+              </div>
+              <span class="intersection-count" id="intersection-count-text">0 / 0</span>
+            </div>
+          </div>
+
           <!-- Stats Strip -->
           <div class="stats-strip">
             <div class="stat-card accent">
@@ -229,12 +280,27 @@
                 <option value="experience">Sort by: Experience Years</option>
               </select>
             </div>
-            <div class="text-xs text-muted font-mono">
-              Click candidate card for deep-dive verification evidence
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-muted font-mono" style="display: inline-block;">Click card for evidence</span>
+              <button id="btn-clear-results" class="btn btn-secondary btn-sm text-red" title="Clear all screening results" style="padding: 5px 12px; font-size: 0.75rem; border-color: rgba(239,68,68,0.3);">
+                <span>🗑️</span>
+                <span>Clear Results</span>
+              </button>
             </div>
           </div>
 
-          <!-- Candidate Cards List -->
+          <!-- ── Trade-Off Shortlist (shown when intersection == 0) ────── -->
+          <div id="tradeoff-shortlist-section" class="hidden">
+            <div class="card mb-3" style="background: rgba(245,158,11,0.07); border-color: rgba(245,158,11,0.35);">
+              <div class="section-header">
+                <span class="section-title">⚠️ No candidate satisfies all mandatory requirements</span>
+                <span class="text-xs text-muted">Candidates below require the fewest compromises</span>
+              </div>
+            </div>
+            <div id="tradeoff-cards-container" class="flex flex-col gap-3"></div>
+          </div>
+
+          <!-- Candidate Cards List (standard ranking) -->
           <div id="rankings-container" class="flex flex-col gap-3">
             <div class="card text-center text-muted" style="padding: 48px 24px;">
               No candidates screened yet. Upload documents in the Workspace tab and start screening.

@@ -196,6 +196,233 @@ def test_flask_app():
     print(f"✓ Flask /api/health OK (Local: {data['local_model']}, Groq: {data['groq_model']})")
 
 
+def test_resume_upload_and_delete():
+    from server import app
+    import io
+    client = app.test_client()
+
+    session_id = "test_sess_dedup_1"
+
+    # 1. Upload 2 resumes
+    data = {
+        "session_id": session_id,
+        "files": [
+            (io.BytesIO(b"Resume text for John Doe"), "john_doe.txt"),
+            (io.BytesIO(b"Resume text for Jane Smith"), "jane_smith.txt"),
+        ]
+    }
+    res = client.post("/api/recruitment/upload-resumes", data=data, content_type="multipart/form-data")
+    assert res.status_code == 200
+    res_data = res.get_json()
+    assert res_data["total_resumes"] == 2
+    assert len(res_data["accepted"]) == 2
+
+    # 2. Upload same resume again -> should update/replace, not duplicate!
+    data2 = {
+        "session_id": session_id,
+        "files": [
+            (io.BytesIO(b"Updated resume for John Doe"), "john_doe.txt"),
+        ]
+    }
+    res2 = client.post("/api/recruitment/upload-resumes", data=data2, content_type="multipart/form-data")
+    assert res2.status_code == 200
+    res2_data = res2.get_json()
+    assert res2_data["total_resumes"] == 2, f"Expected 2 resumes after dedup, got {res2_data['total_resumes']}"
+    assert "john_doe.txt" in res2_data["updated"]
+
+    # 3. Delete single resume
+    del_res = client.post("/api/recruitment/delete-resume", json={"session_id": session_id, "filename": "john_doe.txt"})
+    assert del_res.status_code == 200
+    assert del_res.get_json()["total_resumes"] == 1
+
+    # 4. Clear all resumes
+    clr_res = client.post("/api/recruitment/clear-resumes", json={"session_id": session_id})
+    assert clr_res.status_code == 200
+    assert clr_res.get_json()["total_resumes"] == 0
+
+    print("✓ Resume Upload Deduplication, Single Deletion & Clear All OK")
+
+
+def test_candidate_deletion_and_clear():
+    from recruitment.memory_store import RecruitmentMemory
+    mem = RecruitmentMemory()
+
+    session_id = "test_sess_cand_del"
+    # Insert candidate, ranking, verification
+    with mem._get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO candidates (candidate_id, session_id, name) VALUES (?, ?, ?)", ("c1", session_id, "Cand One"))
+        cursor.execute("INSERT OR REPLACE INTO rankings (session_id, candidate_id, rank, total_score) VALUES (?, ?, ?, ?)", (session_id, "c1", 1, 95.0))
+        cursor.execute("INSERT INTO verifications (session_id, candidate_id, jd_skill, status) VALUES (?, ?, ?, ?)", (session_id, "c1", "Python", "STRONGLY_SUPPORTED"))
+        conn.commit()
+
+    # Delete candidate
+    mem.delete_candidate("c1", session_id)
+    with mem._get_conn() as conn:
+        row = conn.cursor().execute("SELECT * FROM candidates WHERE candidate_id = ?", ("c1",)).fetchone()
+        assert row is None
+        rank_row = conn.cursor().execute("SELECT * FROM rankings WHERE candidate_id = ?", ("c1",)).fetchone()
+        assert rank_row is None
+
+    # Clear screening
+    mem.clear_screening(session_id)
+    print("✓ SQLite Candidate Deletion & Clear Screening OK")
+
+
+def test_conflict_detection_high():
+    from recruitment.agents.requirement_conflict_analyzer import RequirementConflictAnalyzer
+    from recruitment.models import JDAnalysis, ConflictSeverity
+
+    analyzer = RequirementConflictAnalyzer()
+    jd = JDAnalysis(
+        role_title="Junior AI Engineer",
+        seniority_level="Junior",
+        experience_years="5+ years",
+        required_skills=["Python", "PyTorch"],
+    )
+    report = analyzer._heuristic_check(jd)
+    assert report is not None
+    assert report.overall_severity == ConflictSeverity.HIGH
+    assert len(report.conflicts) >= 1
+    print("✓ Requirement Conflict Detection (HIGH severity) OK")
+
+
+def test_conflict_detection_none():
+    from recruitment.agents.requirement_conflict_analyzer import RequirementConflictAnalyzer
+    from recruitment.models import JDAnalysis, ConflictSeverity
+
+    analyzer = RequirementConflictAnalyzer()
+    jd = JDAnalysis(
+        role_title="Senior AI Engineer",
+        seniority_level="Senior",
+        experience_years="5-8 years",
+        required_skills=["Python", "PyTorch", "Kubernetes"],
+    )
+    report = analyzer._heuristic_check(jd)
+    assert report is None or report.overall_severity == ConflictSeverity.NONE
+    print("✓ Requirement Conflict Detection (NONE severity) OK")
+
+
+def test_pool_coverage_intersection_zero():
+    from recruitment.ranking.pool_coverage_analyzer import PoolCoverageAnalyzer
+    from recruitment.models import JDAnalysis, CandidateScore, CandidateProfile, SkillMatch
+
+    analyzer = PoolCoverageAnalyzer()
+    jd = JDAnalysis(
+        role_title="Senior Python Backend Engineer",
+        required_skills=["Python", "Kubernetes"],
+        experience_years="5+ years",
+    )
+    # Candidate 1: has Python and 6 yrs exp, but NO Kubernetes
+    cand1 = CandidateScore(
+        candidate_id="c1",
+        candidate_name="Alice",
+        skill_matches=[
+            SkillMatch(jd_skill="Python", candidate_skill="Python", similarity=1.0, matched=True),
+            SkillMatch(jd_skill="Kubernetes", candidate_skill="", similarity=0.0, matched=False),
+        ],
+        profile=CandidateProfile(candidate_id="c1", name="Alice", total_experience_years=6.0),
+    )
+    # Candidate 2: has Kubernetes, but NO Python and only 2 yrs exp
+    cand2 = CandidateScore(
+        candidate_id="c2",
+        candidate_name="Bob",
+        skill_matches=[
+            SkillMatch(jd_skill="Python", candidate_skill="", similarity=0.0, matched=False),
+            SkillMatch(jd_skill="Kubernetes", candidate_skill="Kubernetes", similarity=1.0, matched=True),
+        ],
+        profile=CandidateProfile(candidate_id="c2", name="Bob", total_experience_years=2.0),
+    )
+
+    cov = analyzer.analyze(jd, [cand1, cand2])
+    assert cov.total_candidates == 2
+    assert cov.intersection_count == 0
+    assert not cov.has_perfect_match
+    python_cov = next(e for e in cov.entries if e.requirement == "Python")
+    assert python_cov.count == 1
+    assert python_cov.percentage == 50.0
+    print("✓ Pool Coverage Analyzer (intersection == 0) OK")
+
+
+def test_pool_coverage_intersection_nonzero():
+    from recruitment.ranking.pool_coverage_analyzer import PoolCoverageAnalyzer
+    from recruitment.models import JDAnalysis, CandidateScore, CandidateProfile, SkillMatch
+
+    analyzer = PoolCoverageAnalyzer()
+    jd = JDAnalysis(
+        role_title="Backend Engineer",
+        required_skills=["Python", "SQL"],
+        experience_years="2+ years",
+    )
+    cand = CandidateScore(
+        candidate_id="c1",
+        candidate_name="Charlie",
+        skill_matches=[
+            SkillMatch(jd_skill="Python", candidate_skill="Python", similarity=1.0, matched=True),
+            SkillMatch(jd_skill="SQL", candidate_skill="SQL", similarity=1.0, matched=True),
+        ],
+        profile=CandidateProfile(candidate_id="c1", name="Charlie", total_experience_years=3.0),
+    )
+    cov = analyzer.analyze(jd, [cand])
+    assert cov.total_candidates == 1
+    assert cov.intersection_count == 1
+    assert cov.has_perfect_match
+    print("✓ Pool Coverage Analyzer (intersection > 0) OK")
+
+
+def test_tradeoff_shortlist_ordering():
+    from recruitment.ranking.pool_coverage_analyzer import PoolCoverageAnalyzer
+    from recruitment.ranking.tradeoff_shortlist_builder import TradeOffShortlistBuilder
+    from recruitment.models import JDAnalysis, CandidateScore, CandidateProfile, SkillMatch
+
+    jd = JDAnalysis(
+        role_title="MLOps Engineer",
+        required_skills=["Python", "Kubernetes", "Docker"],
+        experience_years="3+ years",
+    )
+
+    # Candidate 1: Missing only 1 requirement (Docker)
+    cand1 = CandidateScore(
+        candidate_id="c1",
+        candidate_name="Dave (1 unmet)",
+        total_score=80.0,
+        skill_matches=[
+            SkillMatch(jd_skill="Python", candidate_skill="Python", similarity=1.0, matched=True),
+            SkillMatch(jd_skill="Kubernetes", candidate_skill="Kubernetes", similarity=1.0, matched=True),
+            SkillMatch(jd_skill="Docker", candidate_skill="", similarity=0.0, matched=False),
+        ],
+        profile=CandidateProfile(candidate_id="c1", name="Dave (1 unmet)", total_experience_years=4.0),
+    )
+
+    # Candidate 2: Missing 2 requirements (Kubernetes and Docker)
+    cand2 = CandidateScore(
+        candidate_id="c2",
+        candidate_name="Eve (2 unmet)",
+        total_score=85.0,  # Higher raw score, but more compromises!
+        skill_matches=[
+            SkillMatch(jd_skill="Python", candidate_skill="Python", similarity=1.0, matched=True),
+            SkillMatch(jd_skill="Kubernetes", candidate_skill="", similarity=0.0, matched=False),
+            SkillMatch(jd_skill="Docker", candidate_skill="", similarity=0.0, matched=False),
+        ],
+        profile=CandidateProfile(candidate_id="c2", name="Eve (2 unmet)", total_experience_years=4.0),
+    )
+
+    cov_analyzer = PoolCoverageAnalyzer()
+    coverage = cov_analyzer.analyze(jd, [cand1, cand2])
+
+    builder = TradeOffShortlistBuilder()
+    shortlist = builder.build([cand1, cand2], jd, coverage)
+
+    assert not shortlist.has_perfect_match
+    assert len(shortlist.compromise_candidates) == 2
+    # Dave (unmet=1) must be ranked ahead of Eve (unmet=2)
+    assert shortlist.compromise_candidates[0].candidate_id == "c1"
+    assert shortlist.compromise_candidates[0].unmet_count == 1
+    assert shortlist.compromise_candidates[1].candidate_id == "c2"
+    assert shortlist.compromise_candidates[1].unmet_count == 2
+    print("✓ Trade-Off Shortlist Ordering (fewest compromises first) OK")
+
+
 if __name__ == "__main__":
     print("\nRunning ARIA Core — Talent Screening Smoke Tests...")
     test_doc_processor()
@@ -205,4 +432,12 @@ if __name__ == "__main__":
     test_sqlite_memory()
     test_router()
     test_flask_app()
+    test_resume_upload_and_delete()
+    test_candidate_deletion_and_clear()
+    test_conflict_detection_high()
+    test_conflict_detection_none()
+    test_pool_coverage_intersection_zero()
+    test_pool_coverage_intersection_nonzero()
+    test_tradeoff_shortlist_ordering()
     print("\nALL SMOKE TESTS PASSED SUCCESSFULLY! 🚀\n")
+

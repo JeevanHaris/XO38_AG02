@@ -176,7 +176,8 @@ class GroqGateway:
                 )
         return self._client
 
-    def call(self, model_id, messages, **kwargs):
+    def call(self, model_id, messages, max_retries: int = 3,
+             timeout: int = 60, **kwargs):
         if not self.api_key:
             raise GatewayError(
                 "GROQ_API_KEY not set. Add it to .env or set GROQ_API_KEY env var."
@@ -188,33 +189,61 @@ class GroqGateway:
         # Groq doesn't accept 'keep_alive' or other Ollama-specific kwargs
         kwargs.pop("keep_alive", None)
 
-        t0 = time.time()
-        try:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                **kwargs,
-            )
-            latency = time.time() - t0
-            self._call_count    += 1
-            self._total_latency += latency
+        # Transient network errors that should be retried
+        _RETRYABLE = (
+            "wsarecv", "connection reset", "remotedisconnected",
+            "connectionreset", "broken pipe", "stream reading error",
+            "connection aborted", "read timeout", "timed out",
+        )
 
-            reply      = completion.choices[0].message.content
-            tokens_in  = completion.usage.prompt_tokens     if completion.usage else 0
-            tokens_out = completion.usage.completion_tokens if completion.usage else 0
+        last_exc = None
+        for attempt in range(1, max_retries + 1):
+            t0 = time.time()
+            try:
+                completion = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    timeout=timeout,
+                    **kwargs,
+                )
+                latency = time.time() - t0
+                self._call_count    += 1
+                self._total_latency += latency
 
-            print(f"[GroqGateway] {model} -- {latency:.1f}s -- "
-                  f"{tokens_in}->{tokens_out} tokens")
+                reply      = completion.choices[0].message.content
+                tokens_in  = completion.usage.prompt_tokens     if completion.usage else 0
+                tokens_out = completion.usage.completion_tokens if completion.usage else 0
 
-            return GatewayResponse(
-                content=reply, model=model,
-                tokens_in=tokens_in, tokens_out=tokens_out,
-                latency=latency, done=True,
-                provider="groq",
-            )
+                print(f"[GroqGateway] {model} -- {latency:.1f}s -- "
+                      f"{tokens_in}->{tokens_out} tokens"
+                      + (f" (attempt {attempt})" if attempt > 1 else ""))
 
-        except Exception as e:
-            raise GatewayError(f"Groq API error: {e}") from e
+                return GatewayResponse(
+                    content=reply, model=model,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                    latency=latency, done=True,
+                    provider="groq",
+                )
+
+            except Exception as e:
+                last_exc = e
+                err_str  = str(e).lower()
+                is_transient = any(sig in err_str for sig in _RETRYABLE)
+
+                if is_transient and attempt < max_retries:
+                    wait = 2 ** (attempt - 1)   # 1s, 2s, 4s …
+                    print(f"[GroqGateway] ⚠ Transient network error "
+                          f"(attempt {attempt}/{max_retries}), "
+                          f"retrying in {wait}s: {e}")
+                    time.sleep(wait)
+                    continue
+
+                # Non-retryable or exhausted retries
+                if attempt > 1:
+                    print(f"[GroqGateway] ✗ Failed after {attempt} attempts: {e}")
+                raise GatewayError(f"Groq API error: {e}") from e
+
+        raise GatewayError(f"Groq API error after {max_retries} retries: {last_exc}")
 
     def is_available(self) -> bool:
         if not self.api_key:
