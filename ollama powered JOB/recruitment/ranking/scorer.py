@@ -13,7 +13,7 @@ Scoring Weights:
 
 from ..models import (
     JDAnalysis, CandidateProfile, VerificationResult, VerificationStatus,
-    SkillMatch, CandidateScore, ComponentScore,
+    SkillMatch, CandidateScore, ComponentScore, GitHubEvidenceStatus,
 )
 
 
@@ -230,29 +230,53 @@ class CandidateScorer:
     ) -> tuple[float, str]:
         """
         Score based on overall evidence quality across all verified claims.
+        GitHub evidence boost:
+          - SUPPORTED GitHub + PARTIALLY_SUPPORTED resume → treated as STRONGLY_SUPPORTED
+          - SUPPORTED GitHub + already STRONGLY_SUPPORTED  → small confidence boost
+          - UNVERIFIED GitHub → neutral (no penalty; absence ≠ absence of skill)
         """
         if not verifications:
             return 0.5, "No verification data available"
 
-        total_weight = 0.0
-        total_score  = 0.0
+        total_weight  = 0.0
+        total_score   = 0.0
+        github_boosts = 0
 
         for v in verifications:
-            ev_score = EVIDENCE_SCORES.get(v.status, 0.0)
-            # Weight by verification confidence
-            weight   = v.confidence_score if v.confidence_score > 0 else 0.5
+            base_ev_score = EVIDENCE_SCORES.get(v.status, 0.0)
+            ev_score      = base_ev_score
+
+            # Apply GitHub evidence boost (never penalise UNVERIFIED)
+            if v.github_result and v.github_result.status != GitHubEvidenceStatus.UNVERIFIED:
+                if v.github_result.status == GitHubEvidenceStatus.SUPPORTED:
+                    if v.status == VerificationStatus.PARTIALLY_SUPPORTED:
+                        # Corroborated externally — uplift to strongly-supported level
+                        ev_score = EVIDENCE_SCORES[VerificationStatus.STRONGLY_SUPPORTED]
+                        github_boosts += 1
+                    elif v.status == VerificationStatus.STRONGLY_SUPPORTED:
+                        # Already strong — small confidence bump (cap at 1.0)
+                        ev_score = min(1.0, base_ev_score + 0.05)
+                        github_boosts += 1
+                elif v.github_result.status == GitHubEvidenceStatus.PARTIAL:
+                    # Partial GitHub evidence — minor boost only if currently NOT_MENTIONED
+                    if v.status == VerificationStatus.NOT_MENTIONED:
+                        ev_score = EVIDENCE_SCORES[VerificationStatus.PARTIALLY_SUPPORTED] * 0.5
+                        github_boosts += 1
+
+            weight        = v.confidence_score if v.confidence_score > 0 else 0.5
             total_score  += ev_score * weight
             total_weight += weight
 
         if total_weight == 0:
             return 0.5, "Inconclusive evidence"
 
-        avg = total_score / total_weight
+        avg      = total_score / total_weight
         strongly = sum(1 for v in verifications
                        if v.status == VerificationStatus.STRONGLY_SUPPORTED)
         partial  = sum(1 for v in verifications
                        if v.status == VerificationStatus.PARTIALLY_SUPPORTED)
-        detail   = f"{strongly} strong, {partial} partial evidence"
+        boost_note = f", +{github_boosts} GitHub boost(s)" if github_boosts else ""
+        detail     = f"{strongly} strong, {partial} partial evidence{boost_note}"
 
         return round(avg, 4), detail
 

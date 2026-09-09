@@ -60,6 +60,7 @@ from router  import ModelRouter
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 LOCAL_MODEL    = os.environ.get("LOCAL_MODEL", "llama3.2:latest")
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")    # read-only PAT for GitHub MCP
 
 gateway = MultiGateway(
     ollama_default_model = LOCAL_MODEL,
@@ -74,7 +75,11 @@ router = ModelRouter(
 
 # ─── Recruitment Orchestrator ─────────────────────────────────────────
 from recruitment.orchestrator import RecruitmentOrchestrator
-orchestrator = RecruitmentOrchestrator(gateway=gateway, router=router)
+orchestrator = RecruitmentOrchestrator(
+    gateway      = gateway,
+    router       = router,
+    github_token = GITHUB_TOKEN,
+)
 
 # ─── Flask App ────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -94,8 +99,13 @@ print("=" * 60)
 print(f"  Local model:  {LOCAL_MODEL}")
 print(f"  Groq model:   {GROQ_MODEL}")
 print(f"  Groq enabled: {bool(GROQ_API_KEY)}")
-print(f"  Ollama:       {'✓ Running' if gateway.ollama.is_available() else '✗ Not found'}")
+print(f"  GitHub token: {'configured' if GITHUB_TOKEN else 'not set (optional)'}")
+_ollama_ok = "✓ Running" if gateway.ollama.is_available() else "✗ Not found"
+print(f"  Ollama:       {_ollama_ok}")
 print("=" * 60)
+
+# Runtime GitHub token store (can be updated via API endpoint)
+_runtime_github_token: dict = {"token": GITHUB_TOKEN}
 
 
 from flask import Flask, request, jsonify, Response, stream_with_context, send_from_directory
@@ -234,6 +244,34 @@ def upload_resumes():
     })
 
 
+# ─── GitHub Token (Runtime PAT) ───────────────────────────────────────
+@app.route("/api/recruitment/github-token", methods=["POST"])
+def set_github_token():
+    """
+    Set or update the GitHub Personal Access Token at runtime.
+    The token is stored in memory only (never written to disk).
+    """
+    data  = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+
+    if not token:
+        return jsonify({"error": "token is required"}), 400
+
+    _runtime_github_token["token"] = token
+    orchestrator.github_token       = token
+    masked = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "***"
+    print(f"[Server] GitHub token updated: {masked}")
+    return jsonify({"status": "ok", "masked_token": masked})
+
+
+@app.route("/api/recruitment/github-token", methods=["DELETE"])
+def clear_github_token():
+    """Remove the runtime GitHub token."""
+    _runtime_github_token["token"] = ""
+    orchestrator.github_token       = ""
+    return jsonify({"status": "cleared"})
+
+
 # ─── Delete Single Resume ─────────────────────────────────────────────
 @app.route("/api/recruitment/delete-resume", methods=["POST", "DELETE"])
 @app.route("/api/recruitment/resume", methods=["DELETE"])
@@ -345,6 +383,8 @@ def analyze():
                 resume_files = upload["resumes"],
                 session_id   = session_id,
                 progress_cb  = progress_cb,
+                github_urls  = data.get("github_urls") or {},
+                github_token = data.get("github_token") or _runtime_github_token.get("token", ""),
             )
             _sessions[run_id]["result"] = result
             _sessions[run_id]["done"]   = True

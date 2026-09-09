@@ -4,16 +4,19 @@ RecruitScreen v1.0 — Data Models
 All dataclasses used across the recruitment pipeline.
 
 Hierarchy:
-  JDAnalysis          ← JD Analyzer Agent output
-  CandidateProfile    ← Resume Analyzer Agent output
-  Claim               ← Claim Extractor Agent output
-  Evidence            ← Evidence Retrieval Agent output
-  VerificationResult  ← Evidence Verifier Agent output
-  SkillMatch          ← Semantic Skill Matcher output
-  CandidateScore      ← Scorer output
-  RankedList          ← Comparator output
-  GapReport           ← Gap Analyzer output
-  ScreeningResult     ← Full pipeline output
+  JDAnalysis                ← JD Analyzer Agent output
+  CandidateProfile          ← Resume Analyzer Agent output
+  Claim                     ← Claim Extractor Agent output
+  Evidence                  ← Evidence Retrieval Agent output
+  VerificationResult        ← Evidence Verifier Agent output
+  GitHubRepo                ← GitHub MCP snapshot for one repository
+  GitHubEvidence            ← All collected GitHub repos for one candidate
+  GitHubVerificationResult  ← Per-skill GitHub cross-validation result
+  SkillMatch                ← Semantic Skill Matcher output
+  CandidateScore            ← Scorer output
+  RankedList                ← Comparator output
+  GapReport                 ← Gap Analyzer output
+  ScreeningResult           ← Full pipeline output
 """
 
 from dataclasses import dataclass, field
@@ -48,6 +51,7 @@ class PipelineStage(str, Enum):
     EXTRACTING_CLAIMS    = "extracting_claims"
     RETRIEVING_EVIDENCE  = "retrieving_evidence"
     VERIFYING_EVIDENCE   = "verifying_evidence"
+    GITHUB_EVIDENCE      = "github_evidence"       # [NEW] Stage 5b
     MATCHING_SKILLS      = "matching_skills"
     SCORING              = "scoring"
     POOL_COVERAGE        = "pool_coverage"
@@ -122,6 +126,7 @@ class CandidateProfile:
     raw_claims:         list[str]              = field(default_factory=list)  # unverified claims
     raw_text:           str                    = ""
     filename:           str                    = ""
+    github_url:         str                    = ""   # [NEW] candidate-provided GitHub profile URL
 
     def to_dict(self) -> dict:
         return {
@@ -136,6 +141,7 @@ class CandidateProfile:
             "education":             self.education,
             "certifications":        self.certifications,
             "filename":              self.filename,
+            "github_url":            self.github_url,
         }
 
 
@@ -176,14 +182,101 @@ class Evidence:
 
 
 @dataclass
+class GitHubRepo:
+    """Snapshot of a single GitHub repository."""
+    name:           str        = ""
+    description:    str        = ""
+    language:       str        = ""          # primary language
+    languages:      dict       = field(default_factory=dict)  # {lang: bytes}
+    readme_excerpt: str        = ""          # first 800 chars of README
+    topics:         list[str]  = field(default_factory=list)
+    pushed_at:      str        = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "name":           self.name,
+            "description":    self.description,
+            "language":       self.language,
+            "languages":      self.languages,
+            "readme_excerpt": self.readme_excerpt,
+            "topics":         self.topics,
+            "pushed_at":      self.pushed_at,
+        }
+
+
+@dataclass
+class GitHubEvidence:
+    """All retrieved GitHub repositories for a single candidate."""
+    github_username: str             = ""
+    github_url:      str             = ""
+    repos:           list[GitHubRepo] = field(default_factory=list)
+    fetch_error:     str             = ""   # empty if successful
+    total_repos:     int             = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "github_username": self.github_username,
+            "github_url":      self.github_url,
+            "repos":           [r.to_dict() for r in self.repos],
+            "fetch_error":     self.fetch_error,
+            "total_repos":     self.total_repos,
+        }
+
+
+class GitHubEvidenceStatus(str, Enum):
+    SUPPORTED  = "SUPPORTED"    # Clear repo evidence found
+    PARTIAL    = "PARTIAL"      # Indirect/weak evidence
+    UNVERIFIED = "UNVERIFIED"   # No GitHub evidence — NOT a negative judgment
+
+
+@dataclass
+class GitHubVerificationResult:
+    """Per-skill GitHub cross-validation result."""
+    skill:        str                  = ""
+    status:       GitHubEvidenceStatus = GitHubEvidenceStatus.UNVERIFIED
+    confidence:   str                  = "LOW"    # HIGH | MEDIUM | LOW
+    evidence_repos: list[str]          = field(default_factory=list)  # repo names
+    reasoning:    str                  = ""
+
+    @property
+    def status_icon(self) -> str:
+        return {
+            GitHubEvidenceStatus.SUPPORTED:  "🟢",
+            GitHubEvidenceStatus.PARTIAL:    "🟡",
+            GitHubEvidenceStatus.UNVERIFIED: "⚪",
+        }.get(self.status, "⚪")
+
+    @property
+    def status_label(self) -> str:
+        """Human-readable label that avoids false negatives."""
+        return {
+            GitHubEvidenceStatus.SUPPORTED:  "Externally corroborated",
+            GitHubEvidenceStatus.PARTIAL:    "Partial GitHub evidence",
+            GitHubEvidenceStatus.UNVERIFIED: "Not externally corroborated",
+        }.get(self.status, "Not externally corroborated")
+
+    def to_dict(self) -> dict:
+        return {
+            "skill":          self.skill,
+            "status":         self.status.value,
+            "status_icon":    self.status_icon,
+            "status_label":   self.status_label,
+            "confidence":     self.confidence,
+            "evidence_repos": self.evidence_repos,
+            "reasoning":      self.reasoning,
+        }
+
+
+@dataclass
 class VerificationResult:
-    """Verification of a single claim against retrieved evidence."""
-    claim:            Claim                = field(default_factory=Claim)
-    evidence:         list[Evidence]       = field(default_factory=list)
-    status:           VerificationStatus   = VerificationStatus.NOT_MENTIONED
-    explanation:      str                  = ""
-    confidence_score: float                = 0.0   # 0.0–1.0
-    jd_skill:         str                  = ""
+    """Verification of a single claim against resume + (optionally) GitHub evidence."""
+    claim:            Claim                             = field(default_factory=Claim)
+    evidence:         list[Evidence]                   = field(default_factory=list)
+    status:           VerificationStatus               = VerificationStatus.NOT_MENTIONED
+    explanation:      str                              = ""
+    confidence_score: float                            = 0.0   # 0.0–1.0
+    jd_skill:         str                              = ""
+    github_result:    Optional["GitHubVerificationResult"] = None  # [NEW] Stage 5b
 
     @property
     def status_icon(self) -> str:
@@ -204,6 +297,7 @@ class VerificationResult:
             "explanation":      self.explanation,
             "confidence_score": round(self.confidence_score, 3),
             "jd_skill":         self.jd_skill,
+            "github_result":    self.github_result.to_dict() if self.github_result else None,
         }
 
 

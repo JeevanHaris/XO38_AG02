@@ -50,6 +50,11 @@ class GatewayError(Exception):
     pass
 
 
+class GroqNetworkError(GatewayError):
+    """Raised when Groq is reachable but all transient-retry attempts fail (network instability)."""
+    pass
+
+
 class ModelNotFoundError(Exception):
     """Raised when a requested model is not available."""
     def __init__(self, model, provider="ollama"):
@@ -241,9 +246,11 @@ class GroqGateway:
                 # Non-retryable or exhausted retries
                 if attempt > 1:
                     print(f"[GroqGateway] ✗ Failed after {attempt} attempts: {e}")
+                if is_transient:
+                    raise GroqNetworkError(f"Groq network error after {attempt} attempts: {e}") from e
                 raise GatewayError(f"Groq API error: {e}") from e
 
-        raise GatewayError(f"Groq API error after {max_retries} retries: {last_exc}")
+        raise GroqNetworkError(f"Groq network error after {max_retries} retries: {last_exc}")
 
     def is_available(self) -> bool:
         if not self.api_key:
@@ -294,14 +301,21 @@ class MultiGateway:
             messages:  List of {role, content} dicts
             provider:  "ollama" | "groq"
             **kwargs:  Passed through to the underlying gateway
+
+        Fallback: if Groq raises any GatewayError (including network failures after
+        all retries), automatically falls back to local Ollama so the pipeline
+        never crashes due to intermittent cloud connectivity.
         """
         if provider == "groq" and self._groq_enabled:
-            return self.groq.call(model_id or self.groq.default_model,
-                                  messages, **kwargs)
-        else:
-            # Fall back to Ollama for everything if Groq unavailable
-            return self.ollama.call(model_id or self.ollama.default_model,
-                                    messages, **kwargs)
+            try:
+                return self.groq.call(model_id or self.groq.default_model,
+                                      messages, **kwargs)
+            except GatewayError as e:
+                print(f"[MultiGateway] ⚠ Groq unavailable ({type(e).__name__}: {e}). "
+                      f"Falling back to local Ollama ({self.ollama.default_model}).")
+                # Fall through to Ollama
+        return self.ollama.call(model_id or self.ollama.default_model,
+                                messages, **kwargs)
 
     def is_available(self) -> bool:
         """At least one backend must be available."""

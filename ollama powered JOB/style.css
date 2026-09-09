@@ -602,52 +602,354 @@ body {
 .skill-chip.partial  { background: var(--amber-dim);   color: var(--amber);   border-color: rgba(245,158,11,0.25); }
 .skill-chip.missing  { background: transparent; color: var(--text-muted); border-style: dashed; }
 
-/* ── Skill Breakdown Table ──────────────────────────────────── */
-.skill-row-header {
-  display: grid;
-  grid-template-columns: 280px 170px 1fr;
+/* ── Skill Breakdown & Evidence Verification Cards ─────────── */
+.skill-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+  position: relative;
+}
+
+.skill-card:hover {
+  border-color: var(--border-mid);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  background: var(--bg-card-hover);
+}
+
+.skill-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
   gap: 16px;
-  padding: 10px 12px;
-  background: var(--bg-deep);
+  margin-bottom: 14px;
+}
+
+.skill-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skill-card-name {
+  font-family: var(--font-brand);
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.skill-card-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.skill-claim-callout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 14px;
+  background: rgba(99, 102, 241, 0.07);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.claim-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--accent-light);
+  font-family: var(--font-ui);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.claim-quote {
+  font-family: var(--font-mono);
+  font-size: 0.77rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  font-style: italic;
+}
+
+.skill-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+/* ── Dual Evidence Grid ─────────────────────────────────────── */
+.skill-dual-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+@media (max-width: 960px) {
+  .skill-dual-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.evidence-panel {
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 11, 22, 0.65);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  min-height: 110px;
+  transition: border-color var(--transition);
+}
+
+.evidence-panel:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.evidence-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.evidence-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.evidence-panel-title svg {
+  opacity: 0.8;
+}
+
+.confidence-pill {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent-light);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  white-space: nowrap;
+}
+
+.confidence-pill.high {
+  background: var(--emerald-dim);
+  color: var(--emerald);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.confidence-pill.mid {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.source-tag {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+/* ── Resume Citation Box ────────────────────────────────────── */
+.evidence-quote-box {
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid var(--accent);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  position: relative;
+}
+
+.evidence-quote-box.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.evidence-quote-box.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.btn-quote-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--accent-light);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0 0 0;
+  transition: color var(--transition);
+}
+
+.btn-quote-toggle:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+/* ── GitHub Repos & Reasoning ───────────────────────────────── */
+.github-repos-block {
+  margin-bottom: 8px;
+}
+
+.repos-title-tag {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.repos-count-badge {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.github-repos-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.github-reasoning-box {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.76rem;
+  line-height: 1.48;
+  color: var(--text-secondary);
+  font-style: normal;
+  margin-top: 6px;
+}
+
+.github-reasoning-box .reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.66rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
-.skill-row {
-  display: grid;
-  grid-template-columns: 280px 170px 1fr;
-  align-items: start;
-  gap: 16px;
-  padding: 16px 12px;
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  transition: background 0.15s ease;
-}
-.skill-row:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-.skill-row:last-child { border-bottom: none; }
-.skill-name { font-weight: 600; font-size: 0.875rem; }
-.skill-evidence {
-  font-size: 0.78rem;
+.github-reasoning-box .reasoning-body {
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  padding: 10px 14px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  margin-top: 6px;
-  cursor: pointer;
-  transition: var(--transition);
-  white-space: pre-wrap; word-break: break-word;
 }
-.skill-evidence:hover { border-color: var(--accent); color: var(--text-primary); }
-.skill-evidence.collapsed { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+/* ── Empty State inside evidence panel ──────────────────────── */
+.evidence-empty-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.015);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  height: 100%;
+}
+
+.evidence-empty-box.neutral {
+  border: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.evidence-empty-box .empty-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.evidence-empty-box .empty-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+  font-size: 0.76rem;
+}
+
+.evidence-empty-box .empty-desc {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+/* ── Candidate Header GitHub Meta Link ──────────────────────── */
+.candidate-github-meta-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-light);
+  text-decoration: none;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  transition: all var(--transition);
+}
+
+.candidate-github-meta-link:hover {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #fff;
+}
+
+/* ── Legacy Fallbacks ───────────────────────────────────────── */
+.skill-row-header {
+  display: none;
+}
+.skill-row {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+}
 
 /* ── Gap Analysis ───────────────────────────────────────────── */
 .gap-row {
@@ -1326,4 +1628,168 @@ body {
   border-left: 3px solid var(--border-mid);
   background: rgba(255,255,255,0.025);
   font-style: italic;
+}
+
+/* ── GitHub Settings Panel ──────────────────────────────────── */
+.github-settings-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 420px;
+  max-width: 95vw;
+  height: 100vh;
+  z-index: 999;
+  background: var(--bg-card);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-left: 1px solid var(--border);
+  box-shadow: var(--glass-shadow);
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+.github-settings-panel.open {
+  transform: translateX(0);
+}
+
+.github-settings-inner {
+  padding: 28px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.github-token-row {
+  margin-top: 16px;
+  padding: 14px;
+  background: rgba(255,255,255,0.03);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+/* ── Per-Resume GitHub URL Row ──────────────────────────────── */
+.resume-file-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.025);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+  transition: border-color 0.2s;
+}
+
+.resume-file-row:hover {
+  border-color: var(--border-mid);
+}
+
+.resume-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resume-file-name {
+  flex: 1;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resume-github-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.resume-github-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.resume-github-input {
+  flex: 1;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.resume-github-input::placeholder {
+  color: var(--text-muted);
+}
+
+.resume-github-input:focus {
+  border-color: rgba(120, 84, 247, 0.5);
+}
+
+.resume-github-input.has-url {
+  border-color: rgba(16, 185, 129, 0.4);
+  color: var(--emerald);
+}
+
+/* ── GitHub Evidence Badges ─────────────────────────────────── */
+.github-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.github-badge.supported {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: var(--emerald);
+}
+
+.github-badge.partial {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: var(--amber);
+}
+
+.github-badge.unverified {
+  background: rgba(107, 114, 128, 0.1);
+  border-color: rgba(107, 114, 128, 0.2);
+  color: var(--slate);
+}
+
+.github-badge.no-github {
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-style: italic;
+  font-size: 0.7rem;
+}
+
+/* ── GitHub Stage Active ────────────────────────────────────── */
+.pipeline-stage#stage-github.active {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: var(--emerald);
+}
+
+/* ── GitHub Token Active Badge ──────────────────────────────── */
+#btn-github-settings.token-active {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: var(--emerald);
 }

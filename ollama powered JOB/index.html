@@ -50,7 +50,47 @@
         <span class="status-dot"></span>
         <span id="system-status-text">Connecting...</span>
       </div>
+
+      <!-- GitHub Settings Button -->
+      <button id="btn-github-settings" class="btn btn-secondary btn-xs" title="Configure GitHub Token for evidence retrieval" style="padding: 5px 10px; font-size: 0.75rem; gap: 4px;">
+        <span>🐙</span>
+        <span>GitHub</span>
+      </button>
     </header>
+
+    <!-- GitHub Settings Slide-In Panel -->
+    <div id="github-settings-panel" class="github-settings-panel hidden" role="dialog" aria-label="GitHub Settings">
+      <div class="github-settings-inner">
+        <div class="flex justify-between items-center mb-4">
+          <div>
+            <div style="font-weight: 700; font-size: 1rem;">🐙 GitHub Evidence Settings</div>
+            <div class="text-xs text-muted mt-1">Read-only PAT used to fetch candidate GitHub repository evidence</div>
+          </div>
+          <button id="btn-github-settings-close" class="btn btn-secondary btn-xs" style="padding: 4px 10px;">✕</button>
+        </div>
+
+        <div class="github-token-row">
+          <label class="text-xs text-muted" for="github-token-input" style="margin-bottom: 4px; display: block;">Personal Access Token (PAT)</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="password" id="github-token-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+              style="flex: 1; background: var(--bg-deep); border: 1px solid var(--border); color: var(--text-primary);
+                     border-radius: 8px; padding: 8px 12px; font-family: var(--font-mono); font-size: 0.8rem;
+                     outline: none;" autocomplete="off" />
+            <button id="btn-github-token-save" class="btn btn-primary btn-sm" style="white-space: nowrap;">Save Token</button>
+            <button id="btn-github-token-clear" class="btn btn-secondary btn-xs" style="white-space: nowrap;">Clear</button>
+          </div>
+          <div id="github-token-status" class="text-xs mt-2" style="color: var(--text-muted);"></div>
+        </div>
+
+        <div class="mt-3 text-xs text-muted" style="line-height: 1.6; border-top: 1px solid var(--border); padding-top: 10px;">
+          <strong>How it works:</strong> Candidates provide their GitHub URL during upload.
+          ARIA fetches their public repositories and cross-validates resume skill claims.
+          <br/><strong>Scope required:</strong> <code>public_repo</code> (read-only)
+          <br/><strong>Privacy:</strong> Token is stored only in browser localStorage — never sent to disk.
+          <br/><strong>Note:</strong> Absence of GitHub evidence does not indicate the candidate lacks the skill.
+        </div>
+      </div>
+    </div>
 
     <!-- Sidebar Navigation -->
     <nav class="sidebar">
@@ -144,7 +184,7 @@
                 <input type="file" id="resumes-file-input" accept=".pdf,.docx,.txt" multiple />
                 <div class="upload-icon">👥</div>
                 <div class="upload-title">Drop candidate resumes here</div>
-                <div class="upload-sub">Select multiple PDF, DOCX, or TXT files</div>
+                <div class="upload-sub">Select multiple PDF, DOCX, or TXT files. Optionally add a GitHub URL per candidate.</div>
               </div>
               <div id="resumes-file-list" class="upload-file-list mt-3"></div>
             </div>
@@ -155,7 +195,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <h3 style="font-size: 1.1rem; font-weight: 700;">Launch Agentic Screening Pipeline</h3>
-                <p class="text-sm text-muted mt-1">Runs JD extraction, claim parsing, semantic FAISS evidence retrieval, verification, and deterministic scoring.</p>
+                <p class="text-sm text-muted mt-1">Runs JD extraction, claim parsing, FAISS evidence retrieval, GitHub MCP cross-validation, and deterministic scoring.</p>
               </div>
               <button id="btn-start-screening" class="btn btn-primary btn-lg" disabled>
                 <span>⚡</span>
@@ -183,6 +223,7 @@
               <div class="pipeline-stage" id="stage-claims" title="Claim Extraction">4. Claims</div>
               <div class="pipeline-stage" id="stage-retrieval" title="FAISS Evidence Retrieval">5. Evidence</div>
               <div class="pipeline-stage" id="stage-verification" title="LLM Evidence Verification">6. Verify</div>
+              <div class="pipeline-stage" id="stage-github" title="GitHub MCP Cross-Validation">🐙 5b. GitHub</div>
               <div class="pipeline-stage" id="stage-matching" title="Semantic Skill Matching">7. Match</div>
               <div class="pipeline-stage" id="stage-scoring" title="Deterministic Scoring">8. Score</div>
               <div class="pipeline-stage" id="stage-pool-coverage" title="Pool Coverage Analysis">9. Coverage</div>
@@ -372,19 +413,23 @@
               </div>
             </div>
 
-            <!-- Skill Verification Breakdown Table -->
-            <div class="card">
-              <div class="section-header">
-                <span class="section-title">Skill-by-Skill Verification & Grounded Evidence Quotes</span>
-                <span class="text-xs text-muted">Click any quote block to expand/collapse full passage</span>
+            <!-- Skill Verification Breakdown -->
+            <div class="card" style="padding: 24px;">
+              <div class="section-header mb-4" style="border-bottom: 1px solid var(--border); padding-bottom: 16px;">
+                <div>
+                  <div class="flex items-center gap-3">
+                    <span class="section-title" style="font-size: 1.15rem; font-weight: 700;">Skill-by-Skill Dual Evidence Verification</span>
+                    <span class="badge" id="detail-skill-count" style="background: var(--accent-dim); color: var(--accent-light); border: 1px solid var(--border-mid); font-size: 0.72rem; padding: 2px 10px; border-radius: 20px;">0 Skills</span>
+                  </div>
+                  <div class="text-xs text-muted mt-1">Cross-referencing grounded resume citations with external GitHub repository code artifacts</div>
+                </div>
+                <div class="flex items-center gap-2" id="detail-skills-summary-chips">
+                  <!-- Dynamic summary chips injected via app.js -->
+                </div>
               </div>
-              <div class="skill-row-header">
-                <div>Requirement & Explanation</div>
-                <div>Status</div>
-                <div>Grounded Resume Evidence</div>
-              </div>
-              <div id="detail-skills-list" class="flex flex-col">
-                <!-- Skill rows injected here -->
+
+              <div id="detail-skills-list" class="flex flex-col gap-3">
+                <!-- Skill cards injected here -->
               </div>
             </div>
           </div>

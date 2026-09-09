@@ -74,6 +74,7 @@ class RecruitmentMemory:
                 raw_claims TEXT,
                 raw_text TEXT,
                 filename TEXT,
+                github_url TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (candidate_id, session_id)
             )
@@ -91,6 +92,10 @@ class RecruitmentMemory:
                 confidence_score REAL,
                 explanation TEXT,
                 evidence TEXT,
+                github_status TEXT DEFAULT '',
+                github_confidence TEXT DEFAULT '',
+                github_evidence TEXT DEFAULT '[]',
+                github_url TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """)
@@ -122,14 +127,20 @@ class RecruitmentMemory:
             """)
 
             # Ensure columns exist if table was created in an earlier version
-            try:
-                cursor.execute("ALTER TABLE analyses ADD COLUMN feasibility_report TEXT")
-            except Exception:
-                pass
-            try:
-                cursor.execute("ALTER TABLE analyses ADD COLUMN tradeoff_shortlist TEXT")
-            except Exception:
-                pass
+            _version_cols = [
+                ("analyses",      "feasibility_report",  "TEXT"),
+                ("analyses",      "tradeoff_shortlist",   "TEXT"),
+                ("candidates",    "github_url",           "TEXT DEFAULT ''"),
+                ("verifications", "github_status",        "TEXT DEFAULT ''"),
+                ("verifications", "github_confidence",    "TEXT DEFAULT ''"),
+                ("verifications", "github_evidence",      "TEXT DEFAULT '[]'"),
+                ("verifications", "github_url",           "TEXT DEFAULT ''"),
+            ]
+            for table, col, col_def in _version_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+                except Exception:
+                    pass
 
             # 6. Chat History
             cursor.execute("""
@@ -182,8 +193,10 @@ class RecruitmentMemory:
             for cand in result.candidates:
                 cursor.execute("""
                 INSERT OR REPLACE INTO candidates
-                (candidate_id, session_id, name, email, phone, skills, experience_entries, total_experience_years, projects, education, certifications, raw_claims, raw_text, filename)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (candidate_id, session_id, name, email, phone, skills, experience_entries,
+                 total_experience_years, projects, education, certifications, raw_claims,
+                 raw_text, filename, github_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     cand.candidate_id,
                     session_id,
@@ -199,6 +212,7 @@ class RecruitmentMemory:
                     json.dumps(cand.raw_claims),
                     cand.raw_text,
                     cand.filename,
+                    cand.github_url,
                 ))
 
             # Save Rankings & Verifications
@@ -220,10 +234,13 @@ class RecruitmentMemory:
 
                     # Save each verified skill breakdown
                     for v in s.skill_breakdown:
+                        gh   = v.github_result
                         cursor.execute("""
                         INSERT INTO verifications
-                        (session_id, candidate_id, jd_skill, claim_statement, status, confidence_score, explanation, evidence)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (session_id, candidate_id, jd_skill, claim_statement, status,
+                         confidence_score, explanation, evidence,
+                         github_status, github_confidence, github_evidence, github_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             session_id,
                             s.candidate_id,
@@ -233,6 +250,10 @@ class RecruitmentMemory:
                             v.confidence_score,
                             v.explanation,
                             json.dumps([e.to_dict() for e in v.evidence]),
+                            gh.status.value      if gh else "",
+                            gh.confidence        if gh else "",
+                            json.dumps(gh.evidence_repos if gh else []),
+                            s.profile.github_url if s.profile else "",
                         ))
 
             # Save Analyses (Gaps & Feasibility)
@@ -342,15 +363,19 @@ class RecruitmentMemory:
         for c in candidates[:10]:
             cid = c["candidate_id"]
             verifs = self.get_candidate_verifications(session_id, cid)
-            strong = [v["jd_skill"] for v in verifs if v["status"] == "STRONGLY_SUPPORTED"]
-            partial = [v["jd_skill"] for v in verifs if v["status"] == "PARTIALLY_SUPPORTED"]
+            strong      = [v["jd_skill"] for v in verifs if v["status"] == "STRONGLY_SUPPORTED"]
+            partial     = [v["jd_skill"] for v in verifs if v["status"] == "PARTIALLY_SUPPORTED"]
             unsupported = [v["jd_skill"] for v in verifs if v["status"] in ("UNSUPPORTED", "NOT_MENTIONED")]
+            gh_supported = [v["jd_skill"] for v in verifs if v.get("github_status") == "SUPPORTED"]
+            gh_url      = c.get("github_url", "")
 
             context_lines.append(
-                f"#{c['rank']} {c['name']} (Score: {c['total_score']:.1f}/100, Exp: {c['total_experience_years']} yrs)\n"
-                f"  🟢 Strong Evidence: {', '.join(strong) if strong else 'None'}\n"
+                f"#{c['rank']} {c['name']} (Score: {c['total_score']:.1f}/100, Exp: {c['total_experience_years']} yrs)"
+                + (f" | GitHub: {gh_url}" if gh_url else "") + "\n"
+                f"  🟢 Strong Resume Evidence: {', '.join(strong) if strong else 'None'}\n"
                 f"  🟡 Partial/Skills Only: {', '.join(partial) if partial else 'None'}\n"
-                f"  🔴 Missing/Unsupported: {', '.join(unsupported) if unsupported else 'None'}"
+                f"  🔴 Missing/Unsupported: {', '.join(unsupported) if unsupported else 'None'}\n"
+                + (f"  🐙 GitHub Corroborated: {', '.join(gh_supported)}\n" if gh_supported else "")
             )
         return "\n".join(context_lines)
 

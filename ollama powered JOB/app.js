@@ -22,25 +22,30 @@
     : `${backendProto}//${backendHost}:${BACKEND_PORT}`;
 
   const ENDPOINTS = {
-    health:        `${API_BASE}/api/health`,
-    uploadJd:      `${API_BASE}/api/recruitment/upload-jd`,
-    deleteJd:      `${API_BASE}/api/recruitment/delete-jd`,
+    health: `${API_BASE}/api/health`,
+    uploadJd: `${API_BASE}/api/recruitment/upload-jd`,
+    deleteJd: `${API_BASE}/api/recruitment/delete-jd`,
     uploadResumes: `${API_BASE}/api/recruitment/upload-resumes`,
-    deleteResume:  `${API_BASE}/api/recruitment/delete-resume`,
-    clearResumes:  `${API_BASE}/api/recruitment/clear-resumes`,
-    analyze:       `${API_BASE}/api/recruitment/analyze`,
-    status:        (runId) => `${API_BASE}/api/recruitment/status/${encodeURIComponent(runId)}`,
-    results:       (runId) => `${API_BASE}/api/recruitment/results/${encodeURIComponent(runId)}`,
-    candidate:     (id, runId) => `${API_BASE}/api/recruitment/candidate/${encodeURIComponent(id)}?run_id=${encodeURIComponent(runId)}`,
+    deleteResume: `${API_BASE}/api/recruitment/delete-resume`,
+    clearResumes: `${API_BASE}/api/recruitment/clear-resumes`,
+    analyze: `${API_BASE}/api/recruitment/analyze`,
+    status: (runId) => `${API_BASE}/api/recruitment/status/${encodeURIComponent(runId)}`,
+    results: (runId) => `${API_BASE}/api/recruitment/results/${encodeURIComponent(runId)}`,
+    candidate: (id, runId) => `${API_BASE}/api/recruitment/candidate/${encodeURIComponent(id)}?run_id=${encodeURIComponent(runId)}`,
     deleteCandidate: `${API_BASE}/api/recruitment/delete-candidate`,
-    compare:       `${API_BASE}/api/recruitment/compare`,
-    gaps:          (runId) => `${API_BASE}/api/recruitment/gaps/${encodeURIComponent(runId)}`,
-    chat:          `${API_BASE}/api/chat`,
-    latest:        `${API_BASE}/api/recruitment/latest`,
-    clearResults:  `${API_BASE}/api/recruitment/clear-results`,
+    compare: `${API_BASE}/api/recruitment/compare`,
+    gaps: (runId) => `${API_BASE}/api/recruitment/gaps/${encodeURIComponent(runId)}`,
+    chat: `${API_BASE}/api/chat`,
+    latest: `${API_BASE}/api/recruitment/latest`,
+    clearResults: `${API_BASE}/api/recruitment/clear-results`,
+    githubToken: `${API_BASE}/api/recruitment/github-token`,
   };
 
   // ─── Application State ─────────────────────────────────────────────────
+  function generateUUID() {
+    return 'sess_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+  }
+
   const state = {
     sessionId: generateUUID(),
     runId: null,
@@ -48,119 +53,205 @@
     activePage: 'workspace',
     jdFile: null,
     resumesList: [], // array of File objects
+    githubUrlsMap: {}, // [NEW] { filename: githubUrl }
     selectedCandidateId: null,
     chatMessages: [],
     pollingTimer: null,
     isAnalyzing: false,
   };
 
-  function generateUUID() {
-    return 'sess_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
-  }
+  // ─── GitHub Token Store (localStorage) ────────────────────────────
+  const GITHUB_TOKEN_KEY = 'aria_github_pat';
+  const githubTokenStore = {
+    get:   ()  => localStorage.getItem(GITHUB_TOKEN_KEY) || '',
+    set:   (t) => localStorage.setItem(GITHUB_TOKEN_KEY, t),
+    clear: ()  => localStorage.removeItem(GITHUB_TOKEN_KEY),
+  };
 
   // ─── DOM References ────────────────────────────────────────────────────
   const dom = {
     // Topbar
-    systemStatusBadge:  document.getElementById('system-status-badge'),
-    systemStatusText:   document.getElementById('system-status-text'),
+    systemStatusBadge: document.getElementById('system-status-badge'),
+    systemStatusText: document.getElementById('system-status-text'),
     activeJobIndicator: document.getElementById('active-job-indicator'),
-    activeJobTitle:     document.getElementById('active-job-title'),
+    activeJobTitle: document.getElementById('active-job-title'),
 
     // Navigation
-    navItems:           document.querySelectorAll('.nav-item'),
-    pages:              document.querySelectorAll('.page'),
-    badgeCandidateCount:document.getElementById('badge-candidate-count'),
+    navItems: document.querySelectorAll('.nav-item'),
+    pages: document.querySelectorAll('.page'),
+    badgeCandidateCount: document.getElementById('badge-candidate-count'),
 
     // Workspace & Upload
-    jdDropZone:         document.getElementById('jd-drop-zone'),
-    jdFileInput:        document.getElementById('jd-file-input'),
-    jdStatusTag:        document.getElementById('jd-status-tag'),
-    jdFileInfo:         document.getElementById('jd-file-info'),
-    jdPreviewBox:       document.getElementById('jd-preview-box'),
-    jdPreviewName:      document.getElementById('jd-preview-name'),
-    jdPreviewStats:     document.getElementById('jd-preview-stats'),
-    jdPreviewText:      document.getElementById('jd-preview-text'),
-    btnClearJd:         document.getElementById('btn-clear-jd'),
+    jdDropZone: document.getElementById('jd-drop-zone'),
+    jdFileInput: document.getElementById('jd-file-input'),
+    jdStatusTag: document.getElementById('jd-status-tag'),
+    jdFileInfo: document.getElementById('jd-file-info'),
+    jdPreviewBox: document.getElementById('jd-preview-box'),
+    jdPreviewName: document.getElementById('jd-preview-name'),
+    jdPreviewStats: document.getElementById('jd-preview-stats'),
+    jdPreviewText: document.getElementById('jd-preview-text'),
+    btnClearJd: document.getElementById('btn-clear-jd'),
 
-    resumesDropZone:    document.getElementById('resumes-drop-zone'),
-    resumesFileInput:   document.getElementById('resumes-file-input'),
-    resumesCountBadge:  document.getElementById('resumes-count-badge'),
-    resumesFileList:    document.getElementById('resumes-file-list'),
-    btnClearResumes:    document.getElementById('btn-clear-resumes'),
+    resumesDropZone: document.getElementById('resumes-drop-zone'),
+    resumesFileInput: document.getElementById('resumes-file-input'),
+    resumesCountBadge: document.getElementById('resumes-count-badge'),
+    resumesFileList: document.getElementById('resumes-file-list'),
+    btnClearResumes: document.getElementById('btn-clear-resumes'),
 
-    btnStartScreening:  document.getElementById('btn-start-screening'),
-    pipelineCard:       document.getElementById('pipeline-progress-card'),
-    pipelineStatusTitle:document.getElementById('pipeline-status-title'),
-    progressPct:        document.getElementById('progress-pct'),
-    progressBarFill:    document.getElementById('progress-bar-fill'),
-    progressLog:        document.getElementById('progress-log'),
-    pipelineDoneActions:document.getElementById('pipeline-done-actions'),
-    btnViewResults:     document.getElementById('btn-view-results'),
+    // GitHub Settings
+    btnGithubSettings: document.getElementById('btn-github-settings'),
+    githubSettingsPanel: document.getElementById('github-settings-panel'),
+    btnGithubSettingsClose: document.getElementById('btn-github-settings-close'),
+    githubTokenInput: document.getElementById('github-token-input'),
+    btnGithubTokenSave: document.getElementById('btn-github-token-save'),
+    btnGithubTokenClear: document.getElementById('btn-github-token-clear'),
+    githubTokenStatus: document.getElementById('github-token-status'),
+
+    btnStartScreening: document.getElementById('btn-start-screening'),
+    pipelineCard: document.getElementById('pipeline-progress-card'),
+    pipelineStatusTitle: document.getElementById('pipeline-status-title'),
+    progressPct: document.getElementById('progress-pct'),
+    progressBarFill: document.getElementById('progress-bar-fill'),
+    progressLog: document.getElementById('progress-log'),
+    pipelineDoneActions: document.getElementById('pipeline-done-actions'),
+    btnViewResults: document.getElementById('btn-view-results'),
 
     // Rankings
-    statTotalCandidates:document.getElementById('stat-total-candidates'),
-    statTopScore:       document.getElementById('stat-top-score'),
-    statAvgScore:       document.getElementById('stat-avg-score'),
+    statTotalCandidates: document.getElementById('stat-total-candidates'),
+    statTopScore: document.getElementById('stat-top-score'),
+    statAvgScore: document.getElementById('stat-avg-score'),
     statVerifiedClaims: document.getElementById('stat-verified-claims'),
-    rankingsContainer:  document.getElementById('rankings-container'),
+    rankingsContainer: document.getElementById('rankings-container'),
     filterCandidateInput: document.getElementById('filter-candidate-input'),
-    sortCandidateSelect:  document.getElementById('sort-candidate-select'),
-    btnClearResults:    document.getElementById('btn-clear-results'),
+    sortCandidateSelect: document.getElementById('sort-candidate-select'),
+    btnClearResults: document.getElementById('btn-clear-results'),
     // Feasibility Panel
-    feasibilityPanel:         document.getElementById('feasibility-panel'),
-    feasibilityIcon:          document.getElementById('feasibility-icon'),
-    feasibilitySubtitle:      document.getElementById('feasibility-subtitle'),
+    feasibilityPanel: document.getElementById('feasibility-panel'),
+    feasibilityIcon: document.getElementById('feasibility-icon'),
+    feasibilitySubtitle: document.getElementById('feasibility-subtitle'),
     feasibilitySeverityBadge: document.getElementById('feasibility-severity-badge'),
-    feasibilityConflicts:     document.getElementById('feasibility-conflicts'),
-    feasibilityConflictList:  document.getElementById('feasibility-conflict-list'),
-    feasibilityAdvisory:      document.getElementById('feasibility-advisory'),
-    coverageBarsContainer:    document.getElementById('coverage-bars-container'),
-    coverageCandidateCount:   document.getElementById('coverage-candidate-count'),
-    coverageIntersection:     document.getElementById('coverage-intersection'),
-    intersectionIcon:         document.getElementById('intersection-icon'),
-    intersectionCountText:    document.getElementById('intersection-count-text'),
+    feasibilityConflicts: document.getElementById('feasibility-conflicts'),
+    feasibilityConflictList: document.getElementById('feasibility-conflict-list'),
+    feasibilityAdvisory: document.getElementById('feasibility-advisory'),
+    coverageBarsContainer: document.getElementById('coverage-bars-container'),
+    coverageCandidateCount: document.getElementById('coverage-candidate-count'),
+    coverageIntersection: document.getElementById('coverage-intersection'),
+    intersectionIcon: document.getElementById('intersection-icon'),
+    intersectionCountText: document.getElementById('intersection-count-text'),
     // Trade-Off Shortlist
     tradeoffShortlistSection: document.getElementById('tradeoff-shortlist-section'),
-    tradeoffCardsContainer:   document.getElementById('tradeoff-cards-container'),
+    tradeoffCardsContainer: document.getElementById('tradeoff-cards-container'),
 
     // Detail
-    detailEmptyState:   document.getElementById('detail-empty-state'),
-    detailContentArea:  document.getElementById('detail-content-area'),
-    detailHeaderName:   document.getElementById('detail-header-name'),
-    detailHeaderMeta:   document.getElementById('detail-header-meta'),
+    detailEmptyState: document.getElementById('detail-empty-state'),
+    detailContentArea: document.getElementById('detail-content-area'),
+    detailHeaderName: document.getElementById('detail-header-name'),
+    detailHeaderMeta: document.getElementById('detail-header-meta'),
     detailCandidateName: document.getElementById('detail-candidate-name'),
-    detailCandidateSub:  document.getElementById('detail-candidate-sub'),
-    detailScoreRing:    document.getElementById('detail-score-ring'),
-    detailTotalScore:   document.getElementById('detail-total-score'),
+    detailCandidateSub: document.getElementById('detail-candidate-sub'),
+    detailScoreRing: document.getElementById('detail-score-ring'),
+    detailTotalScore: document.getElementById('detail-total-score'),
     detailTradeoffNote: document.getElementById('detail-tradeoff-note'),
-    scoreCompSkills:    document.getElementById('score-comp-skills'),
-    scoreCompExp:       document.getElementById('score-comp-exp'),
-    scoreCompEvidence:  document.getElementById('score-comp-evidence'),
-    scoreCompOther:     document.getElementById('score-comp-other'),
-    detailSkillsList:   document.getElementById('detail-skills-list'),
-    btnBackToRankings:  document.getElementById('btn-back-to-rankings'),
+    scoreCompSkills: document.getElementById('score-comp-skills'),
+    scoreCompExp: document.getElementById('score-comp-exp'),
+    scoreCompEvidence: document.getElementById('score-comp-evidence'),
+    scoreCompOther: document.getElementById('score-comp-other'),
+    detailSkillsList: document.getElementById('detail-skills-list'),
+    btnBackToRankings: document.getElementById('btn-back-to-rankings'),
 
     // Compare
-    compareSelectA:     document.getElementById('compare-select-a'),
-    compareSelectB:     document.getElementById('compare-select-b'),
-    btnRunCompare:      document.getElementById('btn-run-compare'),
+    compareSelectA: document.getElementById('compare-select-a'),
+    compareSelectB: document.getElementById('compare-select-b'),
+    btnRunCompare: document.getElementById('btn-run-compare'),
     compareNarrativeCard: document.getElementById('compare-narrative-card'),
     compareNarrativeText: document.getElementById('compare-narrative-text'),
     compareWinnerBadge: document.getElementById('compare-winner-badge'),
     compareTableContainer: document.getElementById('compare-table-container'),
-    compareGrid:        document.getElementById('compare-grid'),
+    compareGrid: document.getElementById('compare-grid'),
 
     // Gaps
-    gapRowsContainer:   document.getElementById('gap-rows-container'),
+    gapRowsContainer: document.getElementById('gap-rows-container'),
 
     // Chat
-    chatMessages:       document.getElementById('chat-messages'),
-    chatInput:          document.getElementById('chat-input'),
-    btnChatSend:        document.getElementById('btn-chat-send'),
+    chatMessages: document.getElementById('chat-messages'),
+    chatInput: document.getElementById('chat-input'),
+    btnChatSend: document.getElementById('btn-chat-send'),
 
     // Toast
-    toastContainer:     document.getElementById('toast-container'),
+    toastContainer: document.getElementById('toast-container'),
   };
+
+  // ─── GitHub Settings Panel ──────────────────────────────────────────
+  function updateGithubBtnState() {
+    const hasToken = !!githubTokenStore.get();
+    if (dom.btnGithubSettings) {
+      dom.btnGithubSettings.classList.toggle('token-active', hasToken);
+      dom.btnGithubSettings.title = hasToken
+        ? '🐙 GitHub token configured (click to update)'
+        : '🐙 Configure GitHub Token for evidence retrieval';
+    }
+  }
+
+  // Restore PAT from localStorage on load
+  if (dom.githubTokenInput && githubTokenStore.get()) {
+    dom.githubTokenInput.value = githubTokenStore.get();
+  }
+  updateGithubBtnState();
+
+  if (dom.btnGithubSettings) {
+    dom.btnGithubSettings.addEventListener('click', () => {
+      dom.githubSettingsPanel.classList.toggle('open');
+      dom.githubSettingsPanel.classList.remove('hidden');
+    });
+  }
+  if (dom.btnGithubSettingsClose) {
+    dom.btnGithubSettingsClose.addEventListener('click', () => {
+      dom.githubSettingsPanel.classList.remove('open');
+    });
+  }
+
+  if (dom.btnGithubTokenSave) {
+    dom.btnGithubTokenSave.addEventListener('click', async () => {
+      const token = (dom.githubTokenInput?.value || '').trim();
+      if (!token) {
+        dom.githubTokenStatus.textContent = '⚠ Please enter a token.';
+        dom.githubTokenStatus.style.color = 'var(--amber)';
+        return;
+      }
+      githubTokenStore.set(token);
+      updateGithubBtnState();
+      // Send to server
+      try {
+        const res = await fetch(ENDPOINTS.githubToken, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        dom.githubTokenStatus.textContent = `✓ Token saved: ${data.masked_token}`;
+        dom.githubTokenStatus.style.color = 'var(--emerald)';
+        showToast('🐙 GitHub token configured', 'success');
+      } catch (e) {
+        dom.githubTokenStatus.textContent = `✓ Saved locally (server sync failed: ${e.message})`;
+        dom.githubTokenStatus.style.color = 'var(--amber)';
+      }
+    });
+  }
+
+  if (dom.btnGithubTokenClear) {
+    dom.btnGithubTokenClear.addEventListener('click', async () => {
+      githubTokenStore.clear();
+      if (dom.githubTokenInput) dom.githubTokenInput.value = '';
+      dom.githubTokenStatus.textContent = 'Token cleared.';
+      dom.githubTokenStatus.style.color = 'var(--text-muted)';
+      updateGithubBtnState();
+      try {
+        await fetch(ENDPOINTS.githubToken, { method: 'DELETE' });
+      } catch (_) {}
+      showToast('GitHub token cleared', 'info');
+    });
+  }
 
   // ─── Toast Notifications ───────────────────────────────────────────────
   function showToast(message, type = 'info', duration = 3500) {
@@ -232,7 +323,7 @@
       const data = await res.json();
 
       let text = 'Ready · ';
-      if (data.ollama) text += `Ollama (${data.local_model})`;
+      if (data.ollama) text += ` (${data.local_model})`;
       else text += 'Ollama offline';
 
       if (data.groq_enabled) text += ` + Groq (${data.groq_model})`;
@@ -430,27 +521,58 @@
     }
 
     state.resumesList.forEach((f, idx) => {
-      const item = document.createElement('div');
-      item.className = 'upload-file-item';
-      item.innerHTML = `
-        <span class="file-icon">📄</span>
-        <span class="truncate" style="flex: 1;" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
-        <span class="text-xs font-mono text-muted">${formatBytes(f.size)}</span>
-        <button class="btn-file-delete" type="button" title="Delete ${escapeHtml(f.name)}" data-filename="${escapeHtml(f.name)}">
-          ✕
-        </button>
+      const row = document.createElement('div');
+      row.className = 'resume-file-row';
+
+      const existingUrl = state.githubUrlsMap[f.name] || '';
+
+      row.innerHTML = `
+        <div class="resume-file-header">
+          <span class="file-icon">📄</span>
+          <span class="resume-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          <span class="text-xs font-mono text-muted">${formatBytes(f.size)}</span>
+          <button class="btn-file-delete" type="button" title="Delete ${escapeHtml(f.name)}" data-filename="${escapeHtml(f.name)}">✕</button>
+        </div>
+        <div class="resume-github-input-row">
+          <span class="resume-github-label">🐙 GitHub:</span>
+          <input
+            type="url"
+            class="resume-github-input ${existingUrl ? 'has-url' : ''}"
+            placeholder="https://github.com/username (optional)"
+            value="${escapeHtml(existingUrl)}"
+            data-filename="${escapeHtml(f.name)}"
+            id="github-url-${idx}"
+          />
+        </div>
       `;
 
-      const deleteBtn = item.querySelector('.btn-file-delete');
+      // Delete button
+      const deleteBtn = row.querySelector('.btn-file-delete');
       if (deleteBtn) {
         deleteBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           e.preventDefault();
-          await removeResumeFile(f.name, item);
+          delete state.githubUrlsMap[f.name];
+          await removeResumeFile(f.name, row);
         });
       }
 
-      dom.resumesFileList.appendChild(item);
+      // GitHub URL input live update
+      const ghInput = row.querySelector('.resume-github-input');
+      if (ghInput) {
+        ghInput.addEventListener('input', () => {
+          const url = ghInput.value.trim();
+          if (url) {
+            state.githubUrlsMap[f.name] = url;
+            ghInput.classList.add('has-url');
+          } else {
+            delete state.githubUrlsMap[f.name];
+            ghInput.classList.remove('has-url');
+          }
+        });
+      }
+
+      dom.resumesFileList.appendChild(row);
     });
   }
 
@@ -533,7 +655,11 @@
       const res = await fetch(ENDPOINTS.analyze, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: state.sessionId }),
+        body: JSON.stringify({
+          session_id:   state.sessionId,
+          github_urls:  state.githubUrlsMap,
+          github_token: githubTokenStore.get(),
+        }),
       });
       const data = await res.json();
 
@@ -609,14 +735,15 @@
   }
 
   const STAGE_ORDER = [
-    'document_ingestion',
-    'jd_analysis',
+    'processing_documents',
+    'analyzing_jd',
     'feasibility_analysis',
-    'resume_parsing',
-    'claim_extraction',
-    'evidence_retrieval',
-    'evidence_verification',
-    'skill_matching',
+    'analyzing_resumes',
+    'extracting_claims',
+    'retrieving_evidence',
+    'verifying_evidence',
+    'github_evidence',    // [NEW] Stage 5b
+    'matching_skills',
     'scoring',
     'pool_coverage',
     'ranking',
@@ -624,14 +751,15 @@
   ];
 
   const STAGE_MAP = {
-    'document_ingestion':    'stage-doc',
-    'jd_analysis':           'stage-jd',
+    'processing_documents':  'stage-doc',
+    'analyzing_jd':          'stage-jd',
     'feasibility_analysis':  'stage-feasibility',
-    'resume_parsing':        'stage-resumes',
-    'claim_extraction':      'stage-claims',
-    'evidence_retrieval':    'stage-retrieval',
-    'evidence_verification': 'stage-verification',
-    'skill_matching':        'stage-matching',
+    'analyzing_resumes':     'stage-resumes',
+    'extracting_claims':     'stage-claims',
+    'retrieving_evidence':   'stage-retrieval',
+    'verifying_evidence':    'stage-verification',
+    'github_evidence':       'stage-github',     // [NEW]
+    'matching_skills':       'stage-matching',
     'scoring':               'stage-scoring',
     'pool_coverage':         'stage-pool-coverage',
     'ranking':               'stage-ranking',
@@ -737,19 +865,19 @@
   function renderFeasibilityPanel(report) {
     if (!report || !dom.feasibilityPanel) return;
 
-    const sev    = (report.overall_severity || 'NONE').toUpperCase();
-    const icon   = report.severity_icon || '✅';
-    const panel  = dom.feasibilityPanel;
+    const sev = (report.overall_severity || 'NONE').toUpperCase();
+    const icon = report.severity_icon || '✅';
+    const panel = dom.feasibilityPanel;
 
     // Show panel
     panel.classList.remove('hidden', 'severity-none', 'severity-moderate', 'severity-high');
     panel.classList.add(`severity-${sev.toLowerCase()}`);
 
     // Icon & severity badge
-    dom.feasibilityIcon.textContent   = icon;
+    dom.feasibilityIcon.textContent = icon;
     dom.feasibilitySeverityBadge.textContent = sev === 'NONE' ? 'NO CONFLICT'
       : sev === 'MODERATE' ? '⚠ MODERATE CONFLICT'
-      : '🚨 HIGH CONFLICT';
+        : '🚨 HIGH CONFLICT';
     dom.feasibilitySeverityBadge.className = `conflict-badge badge-${sev.toLowerCase()}`;
 
     // Subtitle
@@ -788,7 +916,7 @@
   function renderCoverageBars(coverage) {
     if (!coverage || !dom.coverageBarsContainer) return;
 
-    const total   = coverage.total_candidates || 0;
+    const total = coverage.total_candidates || 0;
     const entries = coverage.entries || [];
     if (!entries.length) return;
 
@@ -798,8 +926,8 @@
     }
 
     dom.coverageBarsContainer.innerHTML = entries.map(e => {
-      const pct      = e.percentage || 0;
-      let fillClass  = pct >= 70 ? 'adequate' : pct >= 40 ? 'moderate' : 'low';
+      const pct = e.percentage || 0;
+      let fillClass = pct >= 70 ? 'adequate' : pct >= 40 ? 'moderate' : 'low';
       return `
         <div class="coverage-bar-row">
           <span class="coverage-bar-label" title="${escapeHtml(e.requirement)}">${escapeHtml(e.requirement)}</span>
@@ -824,8 +952,8 @@
     if (dom.coverageIntersection) {
       dom.coverageIntersection.classList.remove('hidden');
       dom.coverageIntersection.classList.toggle('match-exists', ic > 0);
-      dom.intersectionIcon.textContent       = ic > 0 ? '✅' : '⚠️';
-      dom.intersectionCountText.textContent  = `${ic} / ${total}`;
+      dom.intersectionIcon.textContent = ic > 0 ? '✅' : '⚠️';
+      dom.intersectionCountText.textContent = `${ic} / ${total}`;
     }
   }
 
@@ -834,8 +962,8 @@
     if (!shortlist || !dom.tradeoffShortlistSection) return;
 
     const hasPerfect = shortlist.has_perfect_match;
-    const allCands   = [...(shortlist.perfect_matches || []),
-                       ...(shortlist.compromise_candidates || [])];
+    const allCands = [...(shortlist.perfect_matches || []),
+    ...(shortlist.compromise_candidates || [])];
 
     // Render coverage bars (always, if coverage data present)
     if (shortlist.coverage) {
@@ -851,17 +979,17 @@
     dom.tradeoffShortlistSection.classList.remove('hidden');
 
     const medals = ['🥇', '🥈', '🥉'];
-    const labels  = ['Closest Overall Fit', 'Strong Alternative', 'Specialized Alternative', 'Alternative'];
+    const labels = ['Closest Overall Fit', 'Strong Alternative', 'Specialized Alternative', 'Alternative'];
 
     dom.tradeoffCardsContainer.innerHTML = allCands.map((tc, idx) => {
       const medal = medals[idx] || `#${tc.rank}`;
       const label = labels[Math.min(idx, labels.length - 1)];
 
-      const metTags     = (tc.met     || []).map(r =>
+      const metTags = (tc.met || []).map(r =>
         `<span class="req-tag req-met">✅ ${escapeHtml(r)}</span>`).join('');
       const partialTags = (tc.partial || []).map(r =>
         `<span class="req-tag req-partial">🟡 ${escapeHtml(r)}</span>`).join('');
-      const unmetTags   = (tc.unmet   || []).map(r =>
+      const unmetTags = (tc.unmet || []).map(r =>
         `<span class="req-tag req-unmet">❌ ${escapeHtml(r)}</span>`).join('');
 
       const narrativeHtml = tc.tradeoff_note
@@ -1169,8 +1297,16 @@
 
     if (dom.detailCandidateName) dom.detailCandidateName.textContent = `${s.candidate_name || 'Candidate'} — Evidence Profile`;
     if (dom.detailHeaderName) dom.detailHeaderName.textContent = s.candidate_name || 'Candidate';
+    const candidateGithubUrl = (s.profile && s.profile.github_url) || s.github_url || '';
+
     if (dom.detailHeaderMeta) {
-      dom.detailHeaderMeta.textContent = `Rank #${ranked.rank} · ${expYears ? expYears.toFixed(1) + ' Years Experience' : 'Experience detected'} · Match Score: ${Math.round(s.total_score || 0)}/100`;
+      let metaStr = `Rank #${ranked.rank} · ${expYears ? expYears.toFixed(1) + ' Years Experience' : 'Experience detected'} · Match Score: ${Math.round(s.total_score || 0)}/100`;
+      if (candidateGithubUrl) {
+        const ghDisplay = candidateGithubUrl.replace(/^https?:\/\/(www\.)?github\.com\/?/, '@').replace(/\/$/, '');
+        dom.detailHeaderMeta.innerHTML = `<span>${escapeHtml(metaStr)}</span> · <a href="${escapeHtml(candidateGithubUrl)}" target="_blank" rel="noopener noreferrer" class="candidate-github-meta-link font-mono" title="Open Candidate GitHub Profile"><span>🐙</span> <span>${escapeHtml(ghDisplay)}</span></a>`;
+      } else {
+        dom.detailHeaderMeta.textContent = metaStr;
+      }
     }
     if (dom.detailTotalScore) dom.detailTotalScore.textContent = Math.round(s.total_score || 0);
 
@@ -1213,74 +1349,270 @@
     if (dom.scoreCompOther) dom.scoreCompOther.textContent = `${otherScore.toFixed(1)} / 15`;
 
     // Render skill verifications
-    renderSkillVerifications(s.skill_breakdown || []);
+    renderSkillVerifications(s.skill_breakdown || [], candidateGithubUrl);
 
     switchPage('detail');
   }
 
-  function renderSkillVerifications(verifications) {
+  function renderSkillVerifications(verifications, candidateGithubUrl = '') {
     dom.detailSkillsList.innerHTML = '';
 
+    // Update count badge & dynamic summary chips in header
+    const skillCountEl = document.getElementById('detail-skill-count');
+    if (skillCountEl) {
+      skillCountEl.textContent = `${verifications ? verifications.length : 0} Skills`;
+    }
+
+    const summaryChipsEl = document.getElementById('detail-skills-summary-chips');
+    if (summaryChipsEl && verifications && verifications.length > 0) {
+      const supportedCount = verifications.filter(v => v.status === 'STRONGLY_SUPPORTED' || v.status === 'PARTIALLY_SUPPORTED').length;
+      const ghCount = verifications.filter(v => v.github_result && (v.github_result.status === 'SUPPORTED' || v.github_result.status === 'PARTIAL')).length;
+      summaryChipsEl.innerHTML = `
+        <span class="badge" style="background: var(--emerald-dim); color: var(--emerald); border: 1px solid rgba(16,185,129,0.3); font-size: 0.7rem; padding: 2px 8px; border-radius: 12px;">
+          ✓ ${supportedCount}/${verifications.length} Resume Grounded
+        </span>
+        ${candidateGithubUrl ? `
+          <span class="badge" style="background: rgba(99,102,241,0.12); color: var(--accent-light); border: 1px solid rgba(99,102,241,0.28); font-size: 0.7rem; padding: 2px 8px; border-radius: 12px;">
+            🐙 ${ghCount}/${verifications.length} GitHub Corroborated
+          </span>
+        ` : ''}
+      `;
+    } else if (summaryChipsEl) {
+      summaryChipsEl.innerHTML = '';
+    }
+
     if (!verifications || verifications.length === 0) {
-      dom.detailSkillsList.innerHTML = '<div class="text-sm text-muted p-4">No verified skills recorded.</div>';
+      dom.detailSkillsList.innerHTML = `
+        <div class="card p-6 text-center text-muted" style="background: rgba(255,255,255,0.02); border: 1px dashed var(--border);">
+          <div style="font-size: 1.5rem; margin-bottom: 6px;">📋</div>
+          <div class="text-sm font-bold text-primary">No verified skills recorded</div>
+          <div class="text-xs text-muted mt-1">No skill verification breakdown was found for this candidate.</div>
+        </div>
+      `;
       return;
     }
 
-    verifications.forEach(v => {
-      const row = document.createElement('div');
-      row.className = 'skill-row';
+    verifications.forEach((v, vIdx) => {
+      const card = document.createElement('div');
+      card.className = 'skill-card';
 
       const badgeInfo = getEvidenceBadge(v.status);
 
-      // Quote / Evidence passage
+      // ── 1. Resume Grounding Column ──────────────────────────
       let passageHtml = '';
+      let topConfidenceTag = '';
+
       if (v.evidence && Array.isArray(v.evidence) && v.evidence.length > 0) {
-        passageHtml = v.evidence.map(e => `
-          <div class="skill-evidence" title="Click to expand/collapse full passage">
-            <div class="evidence-quote font-mono" style="font-size: 0.78rem; line-height: 1.5; color: var(--text-secondary);">
-              "${escapeHtml(e.chunk_text || '')}"
+        const topEv = v.evidence[0];
+        const topScore = topEv.similarity_score != null ? topEv.similarity_score : 0.8;
+        const topPct = Math.round(topScore <= 1 ? topScore * 100 : topScore);
+        const confClass = topPct >= 80 ? 'high' : topPct >= 60 ? 'mid' : '';
+        topConfidenceTag = `<span class="confidence-pill ${confClass}">${topPct}% Match</span>`;
+
+        passageHtml = v.evidence.map((e, eIdx) => {
+          const rawText = (e.chunk_text || '').trim();
+          const isLong = rawText.length > 130;
+          const boxId = `ev-quote-${vIdx}-${eIdx}`;
+          return `
+            <div class="quote-item ${eIdx > 0 ? 'mt-2 pt-2' : ''}" ${eIdx > 0 ? 'style="border-top: 1px dashed rgba(255,255,255,0.05);"' : ''}>
+              <div class="evidence-quote-box ${isLong ? 'clamp' : ''}" id="${boxId}">
+                "${escapeHtml(rawText)}"
+              </div>
+              <div class="flex items-center justify-between mt-1 px-1">
+                ${isLong ? `
+                  <button type="button" class="btn-quote-toggle" data-target="${boxId}">
+                    <span>Show full passage</span> ▾
+                  </button>
+                ` : '<span></span>'}
+                ${e.source_section ? `<span class="source-tag">Source: ${escapeHtml(e.source_section)}</span>` : ''}
+              </div>
             </div>
-            <div class="text-xs text-accent mt-2 flex items-center justify-between" style="font-style: italic;">
-              <span>Match Confidence: ${Math.round(((e.similarity_score != null ? e.similarity_score : 0.8) <= 1 ? (e.similarity_score || 0.8) * 100 : e.similarity_score))}%</span>
-              ${e.source_section ? `<span class="text-muted text-xs font-mono">Source: ${escapeHtml(e.source_section)}</span>` : ''}
-            </div>
-          </div>
-        `).join('');
+          `;
+        }).join('');
       } else {
         passageHtml = `
-          <div class="skill-evidence" style="color: var(--text-muted); cursor: default; font-style: italic;">
-            No direct textual citation found in resume.
+          <div class="evidence-empty-box neutral">
+            <span class="empty-icon">📄</span>
+            <div>
+              <div class="empty-title">No Direct Resume Citation</div>
+              <div class="empty-desc">No specific textual excerpt in the resume met the semantic threshold for this skill.</div>
+            </div>
           </div>
         `;
       }
 
-      row.innerHTML = `
-        <div>
-          <div class="skill-name" style="font-size: 0.95rem; font-weight: 700; color: var(--text-primary);">${escapeHtml(v.jd_skill || 'Skill')}</div>
-          <div class="text-xs text-muted mt-1" style="line-height: 1.4;">${escapeHtml(v.explanation || 'Verified via semantic matching and evidence checks.')}</div>
-          ${v.claim && v.claim.statement ? `<div class="text-xs text-secondary mt-2" style="font-family: var(--font-mono); opacity: 0.8;">Claim: "${escapeHtml(v.claim.statement)}"</div>` : ''}
-        </div>
-        <div>
-          <span class="evidence-badge ${badgeInfo.className}">
-            <span>${badgeInfo.icon}</span>
-            <span>${badgeInfo.label}</span>
+      // ── 2. GitHub Evidence Column ───────────────────────────
+      const gh = v.github_result;
+      let githubHtml = '';
+      let ghBadgeHtml = '';
+      let reposBadgeTag = '';
+
+      if (gh) {
+        const ghStatus  = (gh.status || 'UNVERIFIED').toUpperCase();
+        const ghLabel   = gh.status_label || (ghStatus === 'SUPPORTED' ? 'Externally corroborated' : ghStatus === 'PARTIAL' ? 'Partial GitHub evidence' : 'Not externally corroborated');
+        const ghIcon    = ghStatus === 'SUPPORTED' ? '🟢' : ghStatus === 'PARTIAL' ? '🟡' : '⚪';
+        const badgeClass = ghStatus === 'SUPPORTED' ? 'supported' : ghStatus === 'PARTIAL' ? 'partial' : 'unverified';
+
+        ghBadgeHtml = `
+          <span class="github-badge ${badgeClass}" title="GitHub Verification: ${escapeHtml(ghLabel)}">
+            <span>${ghIcon}</span>
+            <span>${escapeHtml(ghLabel)}</span>
           </span>
+        `;
+
+        const repos = gh.evidence_repos || [];
+        if (repos.length > 0) {
+          reposBadgeTag = `<span class="confidence-pill high">${repos.length} Repo${repos.length > 1 ? 's' : ''}</span>`;
+        }
+
+        const repoChips = repos.slice(0, 6).map(r => {
+          const repoUrl = candidateGithubUrl ? `${candidateGithubUrl.replace(/\/$/, '')}/${encodeURIComponent(r)}` : null;
+          if (repoUrl) {
+            return `<a href="${escapeHtml(repoUrl)}" target="_blank" rel="noopener noreferrer" class="github-chip" title="View repository ${escapeHtml(r)} on GitHub">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+              <span>${escapeHtml(r)}</span>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.6;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </a>`;
+          }
+          return `<span class="github-chip">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+            <span>${escapeHtml(r)}</span>
+          </span>`;
+        }).join('');
+
+        if (ghStatus === 'UNVERIFIED' && repos.length === 0) {
+          githubHtml = `
+            <div class="evidence-empty-box neutral">
+              <span class="empty-icon">⚪</span>
+              <div>
+                <div class="empty-title">Not Externally Corroborated</div>
+                <div class="empty-desc">${escapeHtml(gh.reasoning || 'No public repository code detected for this skill. Absence of public code does not imply lack of skill.')}</div>
+              </div>
+            </div>
+          `;
+        } else {
+          githubHtml = `
+            ${repoChips ? `
+              <div class="github-repos-block">
+                <div class="repos-title-tag">
+                  <span>Corroborating Repositories</span>
+                </div>
+                <div class="github-repos-list">${repoChips}</div>
+              </div>
+            ` : ''}
+            ${gh.reasoning ? `
+              <div class="github-reasoning-box">
+                <div class="reasoning-header">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                  <span>Corroboration Analysis</span>
+                </div>
+                <div class="reasoning-body">${escapeHtml(gh.reasoning)}</div>
+              </div>
+            ` : ''}
+          `;
+        }
+      } else if (!candidateGithubUrl) {
+        ghBadgeHtml = `<span class="github-badge no-github">No GitHub profile</span>`;
+        githubHtml = `
+          <div class="evidence-empty-box neutral">
+            <span class="empty-icon">🐙</span>
+            <div>
+              <div class="empty-title">No GitHub Profile Linked</div>
+              <div class="empty-desc">Candidate did not provide a public GitHub URL with their application.</div>
+            </div>
+          </div>
+        `;
+      } else {
+        ghBadgeHtml = `<span class="github-badge unverified"><span>⚪</span><span>Not corroborated</span></span>`;
+        githubHtml = `
+          <div class="evidence-empty-box neutral">
+            <span class="empty-icon">⚪</span>
+            <div>
+              <div class="empty-title">Corroboration Pending</div>
+              <div class="empty-desc">GitHub repository cross-check was not completed for this skill.</div>
+            </div>
+          </div>
+        `;
+      }
+
+      // ── Assemble Card HTML ─────────────────────────────────
+      card.innerHTML = `
+        <div class="skill-card-top">
+          <div class="skill-card-info">
+            <div class="skill-card-heading">
+              <h4 class="skill-card-name">${escapeHtml(v.jd_skill || 'Skill')}</h4>
+            </div>
+            <div class="skill-card-desc">${escapeHtml(v.explanation || 'Verified via semantic matching and evidence checks.')}</div>
+            ${v.claim && v.claim.statement ? `
+              <div class="skill-claim-callout">
+                <span class="claim-tag">Candidate Claim:</span>
+                <span class="claim-quote">"${escapeHtml(v.claim.statement)}"</span>
+              </div>
+            ` : ''}
+          </div>
+          <div class="skill-card-badges">
+            <span class="evidence-badge ${badgeInfo.className}" title="Resume verification: ${badgeInfo.label}">
+              <span>${badgeInfo.icon}</span>
+              <span>${badgeInfo.label}</span>
+            </span>
+            ${ghBadgeHtml}
+          </div>
         </div>
-        <div>
-          ${passageHtml}
+
+        <div class="skill-dual-grid">
+          <div class="evidence-panel resume-panel">
+            <div class="evidence-panel-header">
+              <div class="evidence-panel-title">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                <span>Grounded Resume Evidence</span>
+              </div>
+              ${topConfidenceTag}
+            </div>
+            <div class="evidence-panel-body">
+              ${passageHtml}
+            </div>
+          </div>
+
+          <div class="evidence-panel github-panel">
+            <div class="evidence-panel-header">
+              <div class="evidence-panel-title">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                <span>GitHub Repository Evidence</span>
+              </div>
+              ${reposBadgeTag}
+            </div>
+            <div class="evidence-panel-body">
+              ${githubHtml}
+            </div>
+          </div>
         </div>
       `;
 
-      // Add collapse/expand toggle on click
-      row.querySelectorAll('.skill-evidence').forEach(evEl => {
-        evEl.addEventListener('click', () => {
-          evEl.classList.toggle('collapsed');
+      // Attach quote toggle events
+      card.querySelectorAll('.btn-quote-toggle').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const targetId = btn.getAttribute('data-target');
+          const box = document.getElementById(targetId);
+          if (box) {
+            const isClamped = box.classList.contains('clamp');
+            if (isClamped) {
+              box.classList.remove('clamp');
+              box.classList.add('expanded');
+              btn.innerHTML = '<span>Collapse passage</span> ▴';
+            } else {
+              box.classList.remove('expanded');
+              box.classList.add('clamp');
+              btn.innerHTML = '<span>Show full passage</span> ▾';
+            }
+          }
         });
       });
 
-      dom.detailSkillsList.appendChild(row);
+      dom.detailSkillsList.appendChild(card);
     });
   }
+
 
   function getEvidenceBadge(status) {
     switch (status) {
@@ -1446,8 +1778,8 @@
   function formatRiskLevel(level) {
     switch (level) {
       case 'HIGH_RISK': return 'High Risk';
-      case 'MODERATE':  return 'Moderate';
-      case 'ADEQUATE':  return 'Adequate';
+      case 'MODERATE': return 'Moderate';
+      case 'ADEQUATE': return 'Adequate';
       default: return level;
     }
   }
@@ -1647,7 +1979,7 @@
     bgVideo.muted = true;
     bgVideo.play().catch(() => {
       const startVideo = () => {
-        bgVideo.play().catch(() => {});
+        bgVideo.play().catch(() => { });
         window.removeEventListener('click', startVideo);
         window.removeEventListener('keydown', startVideo);
       };

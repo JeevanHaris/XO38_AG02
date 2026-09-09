@@ -11,6 +11,7 @@ Pipeline:
   4.  Extract Skill Claims (Llama 3.2)
   5.  Retrieve Evidence (Fast section-aware extraction)
   6.  Verify Evidence (🟢 Strongly Supported, 🟡 Partially Supported, 🔴 Unsupported, ⚪ Not Mentioned)
+  5b. [NEW] GitHub Evidence (GitHubMCPClient + GitHubEvidenceVerifier) — OPTIONAL
   7.  Semantic Skill Matching (Taxonomy + normalized matching)
   8.  Calculate Deterministic Scores (Python: 40% Required, 25% Experience, 20% Evidence, 10% Preferred, 5% Education)
   9.  [NEW] Pool Coverage Analysis (Python -- intersection check)
@@ -28,7 +29,7 @@ from typing import Callable, Optional
 from .models import (
     ScreeningResult, PipelineStage, CandidateProfile,
 )
-from .doc_processor import DocumentProcessor
+from .doc_processor                        import DocumentProcessor
 from .agents.jd_analyzer                   import JDAnalyzerAgent
 from .agents.resume_analyzer               import ResumeAnalyzerAgent
 from .agents.claim_extractor               import ClaimExtractorAgent
@@ -36,6 +37,8 @@ from .agents.evidence_retrieval            import EvidenceRetrievalAgent
 from .agents.evidence_verifier             import EvidenceVerifierAgent
 from .agents.skill_matcher                 import SemanticSkillMatcher
 from .agents.requirement_conflict_analyzer import RequirementConflictAnalyzer
+from .agents.github_evidence_verifier      import GitHubEvidenceVerifier
+from .github_mcp                           import GitHubMCPClient
 from .ranking.scorer                       import CandidateScorer
 from .ranking.comparator                   import CandidateComparator
 from .ranking.gap_analyzer                 import RequirementGapAnalyzer
@@ -50,9 +53,10 @@ class RecruitmentOrchestrator:
     Progress is reported via an optional callback so the server streams updates.
     """
 
-    def __init__(self, gateway, router, db_path: str = None):
-        self.gateway = gateway
-        self.router  = router
+    def __init__(self, gateway, router, db_path: str = None, github_token: str = ""):
+        self.gateway       = gateway
+        self.router        = router
+        self.github_token  = github_token or ""
 
         # Initialize all agents & services
         self.doc_processor         = DocumentProcessor()
@@ -63,6 +67,7 @@ class RecruitmentOrchestrator:
         self.evidence_verifier     = EvidenceVerifierAgent(gateway, router)
         self.skill_matcher         = SemanticSkillMatcher(gateway, router)
         self.conflict_analyzer     = RequirementConflictAnalyzer(gateway, router)
+        self.github_verifier       = GitHubEvidenceVerifier(gateway, router)  # [NEW]
         self.scorer                = CandidateScorer()
         self.comparator            = CandidateComparator(gateway, router)
         self.gap_analyzer          = RequirementGapAnalyzer(gateway, router)
@@ -76,6 +81,8 @@ class RecruitmentOrchestrator:
         resume_files: list[tuple[str, bytes]],        # [(filename, bytes), ...]
         session_id:   str = None,
         progress_cb:  Callable[[ScreeningResult], None] = None,
+        github_urls:  dict[str, str] = None,          # [NEW] {filename: github_url}
+        github_token: str = None,                     # [NEW] override token per-run
     ) -> ScreeningResult:
         """
         Run the full agentic screening pipeline.
@@ -181,6 +188,19 @@ class RecruitmentOrchestrator:
             update(PipelineStage.ANALYZING_RESUMES, 40,
                    f"Parsed and validated {len(profiles)} candidate profiles")
 
+            # ── Attach GitHub URLs to profiles ────────────────────────
+            if github_urls:
+                for profile in profiles:
+                    url = github_urls.get(profile.filename, "")
+                    if not url:
+                        # Also try without extension match
+                        for fname, gurl in github_urls.items():
+                            if fname in profile.filename or profile.filename in fname:
+                                url = gurl
+                                break
+                    if url:
+                        profile.github_url = url.strip()
+
             # ── Stage 4: Extract Skill Claims (Llama 3.2) ─────────────
             update(PipelineStage.EXTRACTING_CLAIMS, 42, "Extracting skill claims for JD requirements...")
             all_claims: dict[str, list] = {}
@@ -218,6 +238,74 @@ class RecruitmentOrchestrator:
 
             update(PipelineStage.VERIFYING_EVIDENCE, 76,
                    f"Verified concrete evidence for {len(profiles)} candidates")
+
+            # ── Stage 5b: GitHub Evidence Collection [NEW] ─────────────
+            effective_token = github_token or self.github_token
+            profiles_with_github = [p for p in profiles if p.github_url]
+
+            if profiles_with_github and effective_token:
+                update(PipelineStage.GITHUB_EVIDENCE, 77,
+                       f"Fetching GitHub evidence for {len(profiles_with_github)} "
+                       f"candidate(s) with GitHub profiles...")
+
+                gh_client = GitHubMCPClient(token=effective_token)
+
+                for i, profile in enumerate(profiles_with_github):
+                    pct = 77 + (i / len(profiles_with_github)) * 2
+                    update(PipelineStage.GITHUB_EVIDENCE, pct,
+                           f"GitHub: fetching evidence for {profile.name} "
+                           f"(@{profile.github_url.split('/')[-1]})...")
+
+                    # Collect GitHub evidence
+                    gh_evidence = gh_client.collect_evidence(
+                        github_url    = profile.github_url,
+                        target_skills = jd_analysis.required_skills,
+                    )
+
+                    if gh_evidence.fetch_error:
+                        update(PipelineStage.GITHUB_EVIDENCE, pct,
+                               f"⚠ GitHub fetch issue for {profile.name}: "
+                               f"{gh_evidence.fetch_error}")
+                        continue
+
+                    # Verify skills against GitHub evidence
+                    claims = all_claims.get(profile.candidate_id, [])
+                    if not claims:
+                        continue
+
+                    gh_results = self.github_verifier.verify_all(
+                        claims          = claims,
+                        github_evidence = gh_evidence,
+                    )
+
+                    # Merge GitHub results into existing VerificationResults
+                    existing_verifs = all_verifications.get(profile.candidate_id, [])
+                    for verif in existing_verifs:
+                        skill = verif.jd_skill
+                        if skill in gh_results:
+                            verif.github_result = gh_results[skill]
+
+                    n_supported = sum(
+                        1 for r in gh_results.values()
+                        if r.status.value == "SUPPORTED"
+                    )
+                    n_partial = sum(
+                        1 for r in gh_results.values()
+                        if r.status.value == "PARTIAL"
+                    )
+                    update(PipelineStage.GITHUB_EVIDENCE, pct,
+                           f"GitHub evidence for {profile.name}: "
+                           f"🟢 {n_supported} corroborated, "
+                           f"🟡 {n_partial} partial, "
+                           f"⚪ {len(gh_results) - n_supported - n_partial} unverified")
+
+            elif profiles_with_github and not effective_token:
+                update(PipelineStage.GITHUB_EVIDENCE, 77,
+                       f"⚪ {len(profiles_with_github)} candidate(s) have GitHub URLs "
+                       f"but no GitHub token configured. Skipping GitHub evidence.")
+            else:
+                update(PipelineStage.GITHUB_EVIDENCE, 77,
+                       "No GitHub URLs provided — skipping GitHub evidence stage")
 
             # ── Stage 7: Semantic Skill Matching ──────────────────────
             update(PipelineStage.MATCHING_SKILLS, 78, "Performing semantic skill matching...")
