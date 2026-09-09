@@ -1,28 +1,66 @@
 """
-RecruitScreen v1.0 — JD Analyzer Agent
-────────────────────────────────────────
-Extracts structured requirements from a raw job description text.
+RecruitScreen / ARIA Core — JD Analyzer Agent
+────────────────────────────────────────────
+Sends the Job Description to Llama 3.2 and validates structured output using Pydantic.
 
-Output schema:
-  {
-    "role_title":       str,
-    "seniority_level":  str,
-    "required_skills":  list[str],
-    "preferred_skills": list[str],
-    "experience_years": str,
-    "education":        list[str],
-    "certifications":   list[str],
-    "responsibilities": list[str],
-  }
+Schema:
+{
+  "role_title": "Web Developer",
+  "seniority_level": "Junior",
+  "required_skills": ["HTML", "CSS", "JavaScript", "REST APIs"],
+  "preferred_skills": ["React", "Python", "PostgreSQL"],
+  "experience": "0-2 years",
+  "education": "Computer Science or related",
+  "certifications": [],
+  "responsibilities": []
+}
 """
 
 import json
 import re
+from typing import List, Union
+from pydantic import BaseModel, Field, field_validator
 from ..models import JDAnalysis
 
 
-SYSTEM_PROMPT = """You are an expert recruitment analyst. Your task is to extract structured information from job descriptions.
+class JDAnalysisSchema(BaseModel):
+    """Pydantic schema to validate and normalize Llama 3.2 output for Job Descriptions."""
+    role_title: str = Field(default="Software Engineer")
+    seniority_level: str = Field(default="Not specified")
+    required_skills: List[str] = Field(default_factory=list)
+    preferred_skills: List[str] = Field(default_factory=list)
+    experience: str = Field(default="Not specified")
+    education: Union[List[str], str] = Field(default_factory=list)
+    certifications: List[str] = Field(default_factory=list)
+    responsibilities: List[str] = Field(default_factory=list)
 
+    @field_validator("required_skills", "preferred_skills", "certifications", "responsibilities", mode="before")
+    @classmethod
+    def clean_string_list(cls, v):
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        if isinstance(v, list):
+            seen = set()
+            cleaned = []
+            for item in v:
+                s = str(item).strip()
+                if s and s.lower() not in seen:
+                    seen.add(s.lower())
+                    cleaned.append(s)
+            return cleaned
+        return []
+
+    @field_validator("education", mode="before")
+    @classmethod
+    def clean_education(cls, v):
+        if isinstance(v, str):
+            return [v.strip()] if v.strip() else []
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+
+SYSTEM_PROMPT = """You are an expert recruitment analyst. Your task is to extract structured requirements from job descriptions.
 Extract ONLY what is explicitly stated. Do NOT invent or infer skills not mentioned.
 Be precise and factual. Output valid JSON only — no markdown, no explanation."""
 
@@ -36,51 +74,41 @@ Job Description:
 
 Return a JSON object with EXACTLY these fields:
 {{
-  "role_title":       "string — the job title",
-  "seniority_level":  "string — Junior/Mid/Senior/Lead/Principal or as stated",
-  "required_skills":  ["list of must-have technical skills, max 15 items"],
-  "preferred_skills": ["list of nice-to-have skills, max 10 items"],
-  "experience_years": "string — e.g. '3-5 years', '2+ years', or 'Not specified'",
-  "education":        ["list of education requirements, e.g. 'Bachelor in CS'"],
-  "certifications":   ["list of required/preferred certifications"],
-  "responsibilities": ["list of key job responsibilities, max 8 items"]
+  "role_title": "string — the job title",
+  "seniority_level": "string — Junior/Mid/Senior/Lead or as stated",
+  "required_skills": ["HTML", "CSS", "JavaScript", "REST APIs"],
+  "preferred_skills": ["React", "Python", "PostgreSQL"],
+  "experience": "0-2 years",
+  "education": "Computer Science or related",
+  "certifications": ["list of required/preferred certifications"],
+  "responsibilities": ["list of key responsibilities, max 6"]
 }}
 
 Rules:
-- required_skills: Only skills explicitly marked as required/must-have
-- preferred_skills: Skills marked as preferred/nice-to-have/bonus
-- Keep skill names concise: "Python", "REST APIs", "PostgreSQL", "Docker"
-- If a section is not mentioned, return empty list []
+- required_skills: Only skills explicitly required/must-have
+- preferred_skills: Skills marked as preferred/nice-to-have
+- Keep skill names concise: "HTML", "CSS", "JavaScript", "REST APIs", "Python"
 - Output ONLY valid JSON, nothing else"""
 
 
 class JDAnalyzerAgent:
-    """Extracts structured requirements from job description text using an LLM."""
+    """Extracts structured requirements from JD text using Llama 3.2 and validates with Pydantic."""
 
     def __init__(self, gateway, router):
         self.gateway = gateway
         self.router  = router
 
     def analyze(self, jd_text: str, filename: str = "") -> JDAnalysis:
-        """
-        Analyze a job description and return a structured JDAnalysis.
-
-        Args:
-            jd_text:  Raw text of the job description
-            filename: Original filename (for reference)
-
-        Returns:
-            JDAnalysis dataclass
-        """
         if not jd_text or not jd_text.strip():
             return JDAnalysis(filename=filename)
 
-        # Truncate very long JDs to stay within context window
         text = jd_text[:8000] if len(jd_text) > 8000 else jd_text
 
-        # Route to local model (extraction task)
-        decision = self.router.route("extract job description requirements",
-                                     task_type_hint="extraction")
+        # Route to Llama 3.2 (routine extraction task)
+        decision = self.router.route(
+            "extract job description requirements",
+            task_type_hint="jd_extraction",
+        )
 
         prompt = EXTRACTION_PROMPT.format(jd_text=text)
         messages = [
@@ -95,43 +123,45 @@ class JDAnalyzerAgent:
             raw = response.content.strip()
             data = self._parse_json(raw)
 
-            print(f"[JDAnalyzer] Extracted: {len(data.get('required_skills', []))} "
-                  f"required, {len(data.get('preferred_skills', []))} preferred skills")
+            # Validate output using Pydantic
+            validated = JDAnalysisSchema.model_validate(data)
+
+            print(f"[JDAnalyzer] Pydantic validated JD: {validated.role_title} — "
+                  f"{len(validated.required_skills)} required, {len(validated.preferred_skills)} preferred skills")
 
             return JDAnalysis(
-                role_title        = data.get("role_title", ""),
-                seniority_level   = data.get("seniority_level", ""),
-                required_skills   = self._clean_list(data.get("required_skills", [])),
-                preferred_skills  = self._clean_list(data.get("preferred_skills", [])),
-                experience_years  = data.get("experience_years", "Not specified"),
-                education         = self._clean_list(data.get("education", [])),
-                certifications    = self._clean_list(data.get("certifications", [])),
-                responsibilities  = self._clean_list(data.get("responsibilities", [])),
-                raw_text          = jd_text,
-                filename          = filename,
+                role_title       = validated.role_title,
+                seniority_level  = validated.seniority_level,
+                required_skills  = validated.required_skills,
+                preferred_skills = validated.preferred_skills,
+                experience_years = validated.experience,
+                education        = validated.education if isinstance(validated.education, list) else [validated.education],
+                certifications   = validated.certifications,
+                responsibilities = validated.responsibilities,
+                raw_text         = jd_text,
+                filename         = filename,
             )
 
         except Exception as e:
-            print(f"[JDAnalyzer] Error: {e}")
-            # Return minimal fallback
-            return JDAnalysis(raw_text=jd_text, filename=filename)
-
-    # ── Helpers ───────────────────────────────────────────────────────
+            print(f"[JDAnalyzer] Error or fallback during parsing: {e}")
+            return JDAnalysis(
+                role_title="Technical Role",
+                required_skills=[],
+                preferred_skills=[],
+                raw_text=jd_text,
+                filename=filename,
+            )
 
     @staticmethod
     def _parse_json(raw: str) -> dict:
-        """Extract and parse JSON from LLM output (handles markdown fences)."""
-        # Strip markdown code fences
         raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
         raw = re.sub(r"```\s*$", "", raw).strip()
 
-        # Try direct parse
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             pass
 
-        # Try to find JSON object within the text
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             try:
@@ -139,19 +169,4 @@ class JDAnalyzerAgent:
             except json.JSONDecodeError:
                 pass
 
-        print(f"[JDAnalyzer] Failed to parse JSON from: {raw[:200]}")
         return {}
-
-    @staticmethod
-    def _clean_list(items: list) -> list[str]:
-        """Normalize a list of strings — deduplicate, strip, remove empties."""
-        if not isinstance(items, list):
-            return []
-        seen   = set()
-        result = []
-        for item in items:
-            s = str(item).strip()
-            if s and s.lower() not in seen:
-                seen.add(s.lower())
-                result.append(s)
-        return result

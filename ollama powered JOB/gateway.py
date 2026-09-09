@@ -66,8 +66,8 @@ class ModelNotFoundError(Exception):
 class ModelGateway:
     """Unified interface for Ollama model calls with VRAM management."""
 
-    def __init__(self, default_model="qwen3:4b", keep_alive="5m"):
-        self.default_model  = default_model
+    def __init__(self, default_model=None, keep_alive="5m"):
+        self.default_model  = default_model or os.environ.get("LOCAL_MODEL", "llama3.2:latest")
         self.keep_alive     = keep_alive
         self._last_model    = None
         self._call_count    = 0
@@ -245,11 +245,11 @@ class MultiGateway:
 
     def __init__(
         self,
-        ollama_default_model: str = "qwen3:4b",
+        ollama_default_model: str = None,
         groq_api_key: str = None,
         groq_default_model: str = None,
     ):
-        self.ollama = ModelGateway(default_model=ollama_default_model)
+        self.ollama = ModelGateway(default_model=ollama_default_model or os.environ.get("LOCAL_MODEL", "llama3.2:latest"))
         self.groq   = GroqGateway(api_key=groq_api_key,
                                   default_model=groq_default_model)
         self._groq_enabled = bool(

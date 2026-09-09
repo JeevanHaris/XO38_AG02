@@ -104,9 +104,10 @@ class EvidenceRetrievalAgent:
             key = claim.jd_skill or claim.skill
             evidence = self.retrieve(claim, profile)
             results[key] = evidence
+            top_score = evidence[0].similarity_score if evidence else 0.0
             print(f"[EvidenceRetrieval] {profile.name} | '{key}': "
                   f"{len(evidence)} passages found "
-                  f"(top score: {evidence[0].similarity_score:.3f if evidence else 0:.3f})")
+                  f"(top score: {top_score:.3f})")
 
         return results
 

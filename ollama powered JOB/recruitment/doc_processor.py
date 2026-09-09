@@ -33,14 +33,23 @@ class DocumentProcessor:
 
         if ext == ".pdf":
             try:
-                from pypdf import PdfReader
-                reader = PdfReader(io.BytesIO(file_bytes))
-                pages  = [page.extract_text() or "" for page in reader.pages]
+                import fitz  # PyMuPDF
+                doc = fitz.open(stream=file_bytes, filetype="pdf")
+                pages = [page.get_text() or "" for page in doc]
+                doc.close()
                 return "\n".join(pages).strip()
             except ImportError:
-                return "[ERROR] pypdf not installed. Run: pip install pypdf"
+                try:
+                    from pypdf import PdfReader
+                    reader = PdfReader(io.BytesIO(file_bytes))
+                    pages  = [page.extract_text() or "" for page in reader.pages]
+                    return "\n".join(pages).strip()
+                except ImportError:
+                    return "[ERROR] PyMuPDF (fitz) or pypdf not installed."
+                except Exception as e:
+                    return f"[ERROR] Could not read PDF with pypdf: {e}"
             except Exception as e:
-                return f"[ERROR] Could not read PDF: {e}"
+                return f"[ERROR] Could not read PDF with PyMuPDF: {e}"
 
         if ext == ".docx":
             try:

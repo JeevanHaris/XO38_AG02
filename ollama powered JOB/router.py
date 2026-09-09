@@ -1,80 +1,57 @@
 """
-RecruitScreen v1.0 — Smart Recruitment Router
-───────────────────────────────────────────────
-Routes tasks to the correct model + provider based on task complexity.
+RecruitScreen / ARIA Core — Smart Recruitment Router
+────────────────────────────────────────────────────
+Routes tasks between Llama 3.2 (Local GPU) and Groq API (Cloud) based on task complexity.
 
-Routing logic:
-  extraction          → Ollama qwen3:4b    (JD parsing, resume parsing, claim extraction)
-  verification_simple → Ollama qwen3:4b    (straightforward claim-evidence matching)
-  verification_complex → Groq llama-3.3-70b (ambiguous evidence, nuanced matching)
-  comparison          → Groq llama-3.3-70b  (multi-candidate trade-off analysis)
-  chat                → Ollama qwen3:4b    (recruiter Q&A, grounded in analysis)
+Two-Model Architecture:
+  Routine Tasks -> Llama 3.2 (Local GPU):
+    - jd_extraction
+    - resume_extraction
+    - skill_extraction
+    - claim_extraction
+    - basic_evidence_check
+    - candidate_summaries
+    - chat (grounded Q&A)
+
+  Complex Tasks -> Groq API (Cloud):
+    - difficult_evidence_verification
+    - candidate_vs_candidate_comparison (complex_comparison)
+    - tradeoff_analysis
+    - complex_requirement_gap_reasoning
+    - final_explanation (complex_explanation)
 """
 
 import os
 
-# ─── Recruitment Routing Table ────────────────────────────────────────
+LLAMA_ROUTINE_TASKS = {
+    "jd_extraction",
+    "resume_extraction",
+    "skill_extraction",
+    "claim_extraction",
+    "basic_evidence_check",
+    "candidate_summaries",
+    "extraction",
+    "verification_simple",
+    "chat",
+}
 
-RECRUITMENT_ROUTING_TABLE = [
-    {
-        "task":        "extraction",
-        "model":       os.environ.get("LOCAL_MODEL", "qwen3:4b"),
-        "provider":    "ollama",
-        "signals": [
-            "extract", "parse", "identify", "list skills", "find requirements",
-            "job description", "resume", "education", "certifications",
-            "experience", "analyze jd", "analyze resume", "claims",
-        ],
-        "description": "JD extraction, resume parsing, claim extraction",
-    },
-    {
-        "task":        "verification_simple",
-        "model":       os.environ.get("LOCAL_MODEL", "qwen3:4b"),
-        "provider":    "ollama",
-        "signals": [
-            "verify", "check claim", "evidence", "supported", "mentioned",
-            "does the resume", "confirm", "validate",
-        ],
-        "description": "Straightforward claim-evidence verification",
-    },
-    {
-        "task":        "comparison",
-        "model":       os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        "provider":    "groq",
-        "signals": [
-            "compare candidates", "trade-off", "tradeoff", "who is better",
-            "best candidate", "rank", "versus", "relative to", "compared to",
-            "stronger", "weaker", "differences between candidates",
-        ],
-        "description": "Multi-candidate comparison and trade-off analysis (Groq)",
-    },
-    {
-        "task":        "complex_reasoning",
-        "model":       os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        "provider":    "groq",
-        "signals": [
-            "interpret", "ambiguous", "unclear", "infer", "explain why",
-            "complex", "nuanced", "borderline", "partial", "interpret this",
-        ],
-        "description": "Complex evidence interpretation (Groq)",
-    },
-    {
-        "task":        "chat",
-        "model":       os.environ.get("LOCAL_MODEL", "qwen3:4b"),
-        "provider":    "ollama",
-        "signals": [],   # default fallback
-        "description": "Recruiter Q&A chat (grounded in stored analysis)",
-    },
-]
+GROQ_COMPLEX_TASKS = {
+    "difficult_evidence_verification",
+    "complex_comparison",
+    "tradeoff_analysis",
+    "complex_requirement_gap_reasoning",
+    "final_explanation",
+    "complex_explanation",
+    "comparison",
+    "complex_reasoning",
+}
 
-
-# ─── Router ───────────────────────────────────────────────────────────
 
 class RoutingDecision:
     """Result of one routing decision."""
 
     def __init__(self, model, task_type, provider="ollama",
-                 confidence=0.5, reason=""):
+                 confidence=1.0, reason=""):
         self.model      = model
         self.task_type  = task_type
         self.provider   = provider
@@ -92,7 +69,7 @@ class RoutingDecision:
 
 
 class ModelRouter:
-    """Routes recruitment tasks to the optimal model and provider."""
+    """Routes recruitment tasks to Llama 3.2 (Local) or Groq API (Cloud)."""
 
     def __init__(
         self,
@@ -100,28 +77,58 @@ class ModelRouter:
         default_provider: str = "ollama",
         groq_enabled:     bool = True,
     ):
-        self.default_model    = default_model or os.environ.get("LOCAL_MODEL", "qwen3:4b")
+        self.local_model      = default_model or os.environ.get("LOCAL_MODEL", "llama3.2:latest")
+        self.groq_model       = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.default_model    = self.local_model
         self.default_provider = default_provider
         self.groq_enabled     = groq_enabled
-        self._routing_table   = RECRUITMENT_ROUTING_TABLE
         self._route_log: list[dict] = []
+
+    def route_task(self, task: str) -> RoutingDecision:
+        """Direct programmatic routing based on task name."""
+        if task in LLAMA_ROUTINE_TASKS:
+            return RoutingDecision(
+                model=self.local_model,
+                task_type=task,
+                provider="ollama",
+                confidence=1.0,
+                reason=f"Routine task '{task}' routed to local Llama 3.2",
+            )
+        elif task in GROQ_COMPLEX_TASKS:
+            if self.groq_enabled:
+                return RoutingDecision(
+                    model=self.groq_model,
+                    task_type=task,
+                    provider="groq",
+                    confidence=1.0,
+                    reason=f"Complex task '{task}' routed to Groq Cloud API",
+                )
+            else:
+                return RoutingDecision(
+                    model=self.local_model,
+                    task_type=task,
+                    provider="ollama",
+                    confidence=0.7,
+                    reason=f"Complex task '{task}' routed to local Llama 3.2 (Groq disabled)",
+                )
+        # Default fallback to Llama 3.2
+        return RoutingDecision(
+            model=self.local_model,
+            task_type=task or "routine",
+            provider="ollama",
+            confidence=0.8,
+            reason="Defaulted to local Llama 3.2",
+        )
 
     def route(self, task_text: str, task_type_hint: str = None,
               force_model: str = None, force_provider: str = None) -> RoutingDecision:
         """
         Determine which model + provider should handle this task.
-
-        Args:
-            task_text:       The text/prompt for the task.
-            task_type_hint:  Explicit task type override (e.g. "extraction").
-            force_model:     Bypass routing, use this model.
-            force_provider:  Bypass routing, use this provider.
         """
-        # Explicit override
         if force_model:
             decision = RoutingDecision(
                 model=force_model,
-                task_type="user_selected",
+                task_type=task_type_hint or "user_selected",
                 provider=force_provider or self.default_provider,
                 confidence=1.0,
                 reason=f"Forced to {force_provider or 'ollama'}/{force_model}",
@@ -129,99 +136,30 @@ class ModelRouter:
             self._log(task_text, decision)
             return decision
 
-        # Use hint if provided
         if task_type_hint:
-            for entry in self._routing_table:
-                if entry["task"] == task_type_hint:
-                    # If Groq not enabled, fall back to Ollama
-                    provider = entry["provider"]
-                    model    = entry["model"]
-                    if provider == "groq" and not self.groq_enabled:
-                        provider = "ollama"
-                        model    = self.default_model
-                    decision = RoutingDecision(
-                        model=model,
-                        task_type=entry["task"],
-                        provider=provider,
-                        confidence=1.0,
-                        reason=f"Task type hint: {task_type_hint}",
-                    )
-                    self._log(task_text, decision)
-                    return decision
+            decision = self.route_task(task_type_hint)
+            self._log(task_text, decision)
+            return decision
 
-        # Keyword/heuristic routing
-        text_lower = task_text.lower()
-        best_match = None
-        best_score = 0
-
-        for entry in self._routing_table:
-            if not entry["signals"]:
-                continue
-            hits = sum(1 for s in entry["signals"] if s in text_lower)
-            if hits > best_score:
-                best_score = hits
-                best_match = entry
-
-        if best_match and best_score > 0:
-            provider = best_match["provider"]
-            model    = best_match["model"]
-            if provider == "groq" and not self.groq_enabled:
-                provider = "ollama"
-                model    = self.default_model
-            matched = [s for s in best_match["signals"] if s in text_lower]
-            decision = RoutingDecision(
-                model=model,
-                task_type=best_match["task"],
-                provider=provider,
-                confidence=min(best_score / 3.0, 1.0),
-                reason=f"Matched: {', '.join(matched[:4])}",
-            )
+        # Infer from prompt keywords
+        lower = (task_text or "").lower()
+        if any(w in lower for w in ["compare", "versus", "tradeoff", "trade-off", "trade off", "who is better"]):
+            decision = self.route_task("complex_comparison")
+        elif any(w in lower for w in ["gap analysis", "missing in pool", "pool risk"]):
+            decision = self.route_task("complex_requirement_gap_reasoning")
+        elif any(w in lower for w in ["extract", "parse", "resume", "job description"]):
+            decision = self.route_task("extraction")
         else:
-            # Default: local chat
-            decision = RoutingDecision(
-                model=self.default_model,
-                task_type="chat",
-                provider="ollama",
-                confidence=0.5,
-                reason="No specific signals — using default local model",
-            )
+            decision = self.route_task("chat")
 
         self._log(task_text, decision)
         return decision
 
-    def route_for_agent(self, agent_name: str) -> RoutingDecision:
-        """Convenience: route based on agent name."""
-        agent_to_task = {
-            "jd_analyzer":       "extraction",
-            "resume_analyzer":   "extraction",
-            "claim_extractor":   "extraction",
-            "evidence_verifier": "verification_simple",
-            "comparator":        "comparison",
-            "tradeoff":          "comparison",
-        }
-        hint = agent_to_task.get(agent_name)
-        return self.route(agent_name, task_type_hint=hint)
-
-    def get_routing_table(self) -> list[dict]:
-        return [
-            {
-                "task":        e["task"],
-                "model":       e["model"],
-                "provider":    e["provider"],
-                "description": e["description"],
-            }
-            for e in self._routing_table
-        ]
-
-    def get_recent_decisions(self, n: int = 10) -> list[dict]:
-        return self._route_log[-n:]
-
-    def _log(self, task_text: str, decision: RoutingDecision):
+    def _log(self, text: str, decision: RoutingDecision):
         self._route_log.append({
-            "input_preview": task_text[:80],
-            **decision.to_dict(),
+            "task_preview": (text[:60] + "...") if len(text) > 60 else text,
+            "decision":     decision.to_dict(),
         })
-        if len(self._route_log) > 50:
-            self._route_log = self._route_log[-50:]
-        print(f"[Router] {decision.task_type} -> {decision.provider}/{decision.model} "
-              f"(conf={decision.confidence:.1f}) -- {decision.reason}")
+
+    def get_recent_routes(self, n=10) -> list[dict]:
+        return self._route_log[-n:]
