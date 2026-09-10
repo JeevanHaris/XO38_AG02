@@ -82,34 +82,69 @@ class CandidateComparator:
 
     def generate_comparison(
         self,
-        score_a:     CandidateScore,
-        score_b:     CandidateScore,
-        jd_analysis: JDAnalysis,
+        score_a,
+        score_b,
+        jd_analysis,
     ) -> dict:
         """
         Generate a detailed comparison between two candidates.
         Used by the frontend's Compare view.
         """
-        tradeoff = self._generate_tradeoff(score_a, score_b, jd_analysis)
+        name_a = score_a.get("candidate_name") if isinstance(score_a, dict) else getattr(score_a, "candidate_name", "Candidate A")
+        name_b = score_b.get("candidate_name") if isinstance(score_b, dict) else getattr(score_b, "candidate_name", "Candidate B")
+        tot_a  = score_a.get("total_score", 0.0) if isinstance(score_a, dict) else getattr(score_a, "total_score", 0.0)
+        tot_b  = score_b.get("total_score", 0.0) if isinstance(score_b, dict) else getattr(score_b, "total_score", 0.0)
 
-        # Skill-by-skill comparison
+        # Extract experience
+        if isinstance(score_a, dict):
+            exp_a = score_a.get("profile", {}).get("total_experience_years") or score_a.get("relevant_years", 0.0) or 0.0
+        else:
+            prof_a = getattr(score_a, "profile", None)
+            exp_a = getattr(prof_a, "total_experience_years", 0.0) if prof_a else 0.0
+
+        if isinstance(score_b, dict):
+            exp_b = score_b.get("profile", {}).get("total_experience_years") or score_b.get("relevant_years", 0.0) or 0.0
+        else:
+            prof_b = getattr(score_b, "profile", None)
+            exp_b = getattr(prof_b, "total_experience_years", 0.0) if prof_b else 0.0
+
+        tradeoff = self._generate_tradeoff(score_a, score_b, jd_analysis)
         skill_comparison = self._compare_skills(score_a, score_b)
+        rec = self._recommendation(score_a, score_b)
+
+        if tot_a > tot_b:
+            winner = name_a
+        elif tot_b > tot_a:
+            winner = name_b
+        else:
+            winner = "Tie"
+
+        dict_a = score_a if isinstance(score_a, dict) else score_a.to_dict()
+        dict_b = score_b if isinstance(score_b, dict) else score_b.to_dict()
 
         return {
-            "candidate_a":      score_a.to_dict(),
-            "candidate_b":      score_b.to_dict(),
-            "tradeoff":         tradeoff,
-            "skill_comparison": skill_comparison,
-            "recommendation":   self._recommendation(score_a, score_b),
+            "candidate_a":        dict_a,
+            "candidate_b":        dict_b,
+            "candidate_a_name":   name_a,
+            "candidate_b_name":   name_b,
+            "candidate_a_score":  round(float(tot_a), 1),
+            "candidate_b_score":  round(float(tot_b), 1),
+            "candidate_a_exp":    round(float(exp_a), 1),
+            "candidate_b_exp":    round(float(exp_b), 1),
+            "tradeoff":           tradeoff,
+            "narrative":          tradeoff,
+            "winner":             winner,
+            "recommendation":     rec,
+            "skill_comparison":   skill_comparison,
         }
 
     # ── Private ───────────────────────────────────────────────────────
 
     def _generate_tradeoff(
         self,
-        score_a:     CandidateScore,
-        score_b:     CandidateScore,
-        jd_analysis: JDAnalysis,
+        score_a,
+        score_b,
+        jd_analysis,
     ) -> str:
         """Generate a 2-3 sentence trade-off narrative via Groq."""
         if not self.gateway:
@@ -121,19 +156,31 @@ class CandidateComparator:
                 task_type_hint="comparison",
             )
 
+            name_a = score_a.get("candidate_name") if isinstance(score_a, dict) else getattr(score_a, "candidate_name", "Candidate A")
+            name_b = score_b.get("candidate_name") if isinstance(score_b, dict) else getattr(score_b, "candidate_name", "Candidate B")
+            tot_a  = score_a.get("total_score", 0.0) if isinstance(score_a, dict) else getattr(score_a, "total_score", 0.0)
+            tot_b  = score_b.get("total_score", 0.0) if isinstance(score_b, dict) else getattr(score_b, "total_score", 0.0)
+
             strong_a = self._get_strong_skills(score_a)
             weak_a   = self._get_weak_skills(score_a)
             strong_b = self._get_strong_skills(score_b)
             weak_b   = self._get_weak_skills(score_b)
 
+            role_title = ""
+            if jd_analysis:
+                if isinstance(jd_analysis, dict):
+                    role_title = jd_analysis.get("role_title", "")
+                else:
+                    role_title = getattr(jd_analysis, "role_title", "")
+
             prompt = TRADEOFF_PROMPT.format(
-                role    = jd_analysis.role_title or "this position",
-                name_a  = score_a.candidate_name,
-                score_a = score_a.total_score,
+                role     = role_title or "this position",
+                name_a   = name_a,
+                score_a  = tot_a,
                 strong_a = ", ".join(strong_a[:4]) or "N/A",
                 weak_a   = ", ".join(weak_a[:3])   or "None",
-                name_b  = score_b.candidate_name,
-                score_b = score_b.total_score,
+                name_b   = name_b,
+                score_b  = tot_b,
                 strong_b = ", ".join(strong_b[:4]) or "N/A",
                 weak_b   = ", ".join(weak_b[:3])   or "None",
             )
@@ -153,29 +200,49 @@ class CandidateComparator:
             return self._rule_based_tradeoff(score_a, score_b)
 
     @staticmethod
-    def _rule_based_tradeoff(a: CandidateScore, b: CandidateScore) -> str:
+    def _rule_based_tradeoff(a, b) -> str:
         """Simple rule-based trade-off when LLM is unavailable."""
-        diff = abs(a.total_score - b.total_score)
+        name_a = a.get("candidate_name") if isinstance(a, dict) else getattr(a, "candidate_name", "Candidate A")
+        name_b = b.get("candidate_name") if isinstance(b, dict) else getattr(b, "candidate_name", "Candidate B")
+        tot_a  = a.get("total_score", 0.0) if isinstance(a, dict) else getattr(a, "total_score", 0.0)
+        tot_b  = b.get("total_score", 0.0) if isinstance(b, dict) else getattr(b, "total_score", 0.0)
+
+        diff = abs(tot_a - tot_b)
         if diff < 5:
             return (
-                f"{a.candidate_name} and {b.candidate_name} are closely matched "
-                f"({a.total_score:.0f} vs {b.total_score:.0f}). "
+                f"{name_a} and {name_b} are closely matched "
+                f"({tot_a:.0f} vs {tot_b:.0f}). "
                 f"Review individual skill evidence to make the final call."
             )
-        winner = a if a.total_score > b.total_score else b
-        loser  = b if winner is a else a
+        winner_name  = name_a if tot_a > tot_b else name_b
+        winner_score = tot_a if tot_a > tot_b else tot_b
+        loser_score  = tot_b if tot_a > tot_b else tot_a
         return (
-            f"{winner.candidate_name} scores higher overall ({winner.total_score:.0f} vs "
-            f"{loser.total_score:.0f}). "
+            f"{winner_name} scores higher overall ({winner_score:.0f} vs "
+            f"{loser_score:.0f}). "
             f"Review the skill evidence breakdown for a detailed comparison."
         )
 
     @staticmethod
-    def _compare_skills(a: CandidateScore, b: CandidateScore) -> list[dict]:
+    def _compare_skills(a, b) -> list[dict]:
         """Build a skill-by-skill comparison table."""
-        # Build lookup maps: jd_skill → VerificationResult
-        def build_map(score: CandidateScore) -> dict:
-            return {v.jd_skill: v for v in score.skill_breakdown}
+        def build_map(score) -> dict:
+            if isinstance(score, dict):
+                breakdown = score.get("skill_breakdown") or []
+            else:
+                breakdown = getattr(score, "skill_breakdown", []) or []
+
+            out = {}
+            for v in breakdown:
+                if isinstance(v, dict):
+                    skill_name = v.get("jd_skill") or v.get("skill")
+                    if skill_name:
+                        out[skill_name] = v
+                else:
+                    skill_name = getattr(v, "jd_skill", None) or getattr(v, "skill", None)
+                    if skill_name:
+                        out[skill_name] = v
+            return out
 
         map_a = build_map(a)
         map_b = build_map(b)
@@ -183,47 +250,107 @@ class CandidateComparator:
         # Union of all skills
         all_skills = sorted(set(map_a.keys()) | set(map_b.keys()))
 
+        weight_map = {
+            "STRONGLY_SUPPORTED": 3,
+            "PARTIALLY_SUPPORTED": 2,
+            "UNSUPPORTED": 1,
+            "NOT_MENTIONED": 0,
+        }
+
+        icon_map = {
+            "STRONGLY_SUPPORTED": "🟢",
+            "PARTIALLY_SUPPORTED": "🟡",
+            "UNSUPPORTED": "🔴",
+            "NOT_MENTIONED": "⚪",
+        }
+
+        def extract_status_info(v):
+            if not v:
+                return "NOT_MENTIONED", "⚪", ""
+            if isinstance(v, dict):
+                raw_st = v.get("status", "NOT_MENTIONED")
+                status_str = raw_st.value if hasattr(raw_st, "value") else str(raw_st)
+                icon = v.get("status_icon") or icon_map.get(status_str, "⚪")
+                explanation = v.get("explanation") or ""
+                return status_str, icon, explanation
+
+            raw_st = getattr(v, "status", "NOT_MENTIONED")
+            status_str = raw_st.value if hasattr(raw_st, "value") else str(raw_st)
+            icon = getattr(v, "status_icon", None) or icon_map.get(status_str, "⚪")
+            explanation = getattr(v, "explanation", "") or ""
+            return status_str, icon, explanation
+
         rows = []
         for skill in all_skills:
-            va = map_a.get(skill)
-            vb = map_b.get(skill)
+            status_a, icon_a, exp_a = extract_status_info(map_a.get(skill))
+            status_b, icon_b, exp_b = extract_status_info(map_b.get(skill))
+
+            wa = weight_map.get(status_a, 0)
+            wb = weight_map.get(status_b, 0)
+            favors = "A" if wa > wb else ("B" if wb > wa else "")
+
             rows.append({
-                "skill":      skill,
+                "skill":    skill,
+                "a_status": status_a,
+                "b_status": status_b,
+                "favors":   favors,
                 "candidate_a": {
-                    "status": va.status.value      if va else "NOT_MENTIONED",
-                    "icon":   va.status_icon        if va else "⚪",
-                    "explanation": va.explanation  if va else "",
+                    "status":      status_a,
+                    "icon":        icon_a,
+                    "explanation": exp_a,
                 },
                 "candidate_b": {
-                    "status": vb.status.value      if vb else "NOT_MENTIONED",
-                    "icon":   vb.status_icon        if vb else "⚪",
-                    "explanation": vb.explanation  if vb else "",
+                    "status":      status_b,
+                    "icon":        icon_b,
+                    "explanation": exp_b,
                 },
             })
         return rows
 
     @staticmethod
-    def _get_strong_skills(score: CandidateScore) -> list[str]:
-        return [
-            v.jd_skill for v in score.skill_breakdown
-            if v.status == VerificationStatus.STRONGLY_SUPPORTED
-        ]
+    def _get_strong_skills(score) -> list[str]:
+        breakdown = score.get("skill_breakdown") if isinstance(score, dict) else getattr(score, "skill_breakdown", [])
+        strong = []
+        for v in (breakdown or []):
+            if isinstance(v, dict):
+                st = v.get("status")
+                st_val = st.value if hasattr(st, "value") else str(st)
+                if st_val == "STRONGLY_SUPPORTED":
+                    strong.append(v.get("jd_skill") or v.get("skill", ""))
+            else:
+                st = getattr(v, "status", None)
+                st_val = st.value if hasattr(st, "value") else str(st)
+                if st_val == "STRONGLY_SUPPORTED":
+                    strong.append(getattr(v, "jd_skill", "") or getattr(v, "skill", ""))
+        return [s for s in strong if s]
 
     @staticmethod
-    def _get_weak_skills(score: CandidateScore) -> list[str]:
-        return [
-            v.jd_skill for v in score.skill_breakdown
-            if v.status in (
-                VerificationStatus.NOT_MENTIONED,
-                VerificationStatus.UNSUPPORTED,
-            )
-        ]
+    def _get_weak_skills(score) -> list[str]:
+        breakdown = score.get("skill_breakdown") if isinstance(score, dict) else getattr(score, "skill_breakdown", [])
+        weak = []
+        for v in (breakdown or []):
+            if isinstance(v, dict):
+                st = v.get("status")
+                st_val = st.value if hasattr(st, "value") else str(st)
+                if st_val in ("NOT_MENTIONED", "UNSUPPORTED"):
+                    weak.append(v.get("jd_skill") or v.get("skill", ""))
+            else:
+                st = getattr(v, "status", None)
+                st_val = st.value if hasattr(st, "value") else str(st)
+                if st_val in ("NOT_MENTIONED", "UNSUPPORTED"):
+                    weak.append(getattr(v, "jd_skill", "") or getattr(v, "skill", ""))
+        return [s for s in weak if s]
 
     @staticmethod
-    def _recommendation(a: CandidateScore, b: CandidateScore) -> str:
-        if a.total_score > b.total_score + 5:
-            return f"Recommend {a.candidate_name}"
-        elif b.total_score > a.total_score + 5:
-            return f"Recommend {b.candidate_name}"
+    def _recommendation(a, b) -> str:
+        name_a  = a.get("candidate_name") if isinstance(a, dict) else getattr(a, "candidate_name", "Candidate A")
+        name_b  = b.get("candidate_name") if isinstance(b, dict) else getattr(b, "candidate_name", "Candidate B")
+        score_a = a.get("total_score", 0.0) if isinstance(a, dict) else getattr(a, "total_score", 0.0)
+        score_b = b.get("total_score", 0.0) if isinstance(b, dict) else getattr(b, "total_score", 0.0)
+
+        if score_a > score_b + 5:
+            return f"Recommend {name_a}"
+        elif score_b > score_a + 5:
+            return f"Recommend {name_b}"
         else:
             return "Too close to call — review evidence details"

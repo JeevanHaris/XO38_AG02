@@ -1,4 +1,4 @@
-﻿"""
+"""
 RecruitScreen -- Pool Coverage Analyzer
 ----------------------------------------
 Pure Python analysis: for each required skill/experience constraint,

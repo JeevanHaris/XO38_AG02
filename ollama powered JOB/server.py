@@ -635,23 +635,44 @@ def compare_candidates():
                 result = sess["result"]
                 break
 
-    if not result or not result.ranked_list:
-        return jsonify({"error": "Results not ready"}), 202
+    score_a = None
+    score_b = None
+    jd_analysis = None
 
-    # Find both candidates
-    score_map = {
-        r.score.candidate_id: r.score
-        for r in result.ranked_list.candidates
-    }
+    if result and result.ranked_list:
+        score_map = {
+            r.score.candidate_id: r.score
+            for r in result.ranked_list.candidates
+        }
+        score_a = score_map.get(id_a)
+        score_b = score_map.get(id_b)
+        jd_analysis = result.jd_analysis
 
-    score_a = score_map.get(id_a)
-    score_b = score_map.get(id_b)
+    # 2. Search in SQLite Recruitment Memory fallback
+    if not score_a or not score_b:
+        try:
+            latest_db = orchestrator.memory.get_latest_screening_dict()
+            if latest_db and "ranked_list" in latest_db and latest_db["ranked_list"]:
+                db_map = {
+                    c.get("score", {}).get("candidate_id"): c.get("score")
+                    for c in latest_db["ranked_list"].get("candidates", [])
+                }
+                if not score_a:
+                    score_a = db_map.get(id_a)
+                if not score_b:
+                    score_b = db_map.get(id_b)
+                if not jd_analysis:
+                    jd_analysis = latest_db.get("jd_analysis")
+        except Exception as e:
+            print(f"[Server] compare DB fallback error: {e}")
 
     if not score_a or not score_b:
+        if not result and not score_a and not score_b:
+            return jsonify({"error": "Results not ready"}), 202
         return jsonify({"error": "One or both candidates not found"}), 404
 
     comparison = orchestrator.comparator.generate_comparison(
-        score_a, score_b, result.jd_analysis
+        score_a, score_b, jd_analysis
     )
     return jsonify(comparison)
 

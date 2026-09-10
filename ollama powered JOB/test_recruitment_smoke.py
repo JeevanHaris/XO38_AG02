@@ -423,6 +423,127 @@ def test_tradeoff_shortlist_ordering():
     print("✓ Trade-Off Shortlist Ordering (fewest compromises first) OK")
 
 
+def test_candidate_comparator_comparison():
+    from recruitment.ranking.comparator import CandidateComparator
+    from recruitment.models import CandidateScore, CandidateProfile, VerificationResult, VerificationStatus, Claim, JDAnalysis
+
+    v1 = [
+        VerificationResult(
+            claim=Claim(skill="Go"),
+            jd_skill="Go",
+            status=VerificationStatus.STRONGLY_SUPPORTED,
+            explanation="5 years production Go experience.",
+        ),
+        VerificationResult(
+            claim=Claim(skill="Kubernetes"),
+            jd_skill="Kubernetes",
+            status=VerificationStatus.PARTIALLY_SUPPORTED,
+            explanation="Familiar with basic kubectl.",
+        )
+    ]
+    v2 = [
+        VerificationResult(
+            claim=Claim(skill="Go"),
+            jd_skill="Go",
+            status=VerificationStatus.NOT_MENTIONED,
+            explanation="No Go mentioned.",
+        ),
+        VerificationResult(
+            claim=Claim(skill="Kubernetes"),
+            jd_skill="Kubernetes",
+            status=VerificationStatus.STRONGLY_SUPPORTED,
+            explanation="CKA certified, managed clusters.",
+        )
+    ]
+
+    cand1 = CandidateScore(
+        candidate_id="c1",
+        candidate_name="David Miller",
+        total_score=92.0,
+        skill_breakdown=v1,
+        profile=CandidateProfile(candidate_id="c1", name="David Miller", total_experience_years=6.0),
+    )
+    cand2 = CandidateScore(
+        candidate_id="c2",
+        candidate_name="Sarah Chen",
+        total_score=87.0,
+        skill_breakdown=v2,
+        profile=CandidateProfile(candidate_id="c2", name="Sarah Chen", total_experience_years=5.0),
+    )
+    jd = JDAnalysis(role_title="Lead Cloud Engineer", required_skills=["Go", "Kubernetes"])
+
+    comp = CandidateComparator()
+    res = comp.generate_comparison(cand1, cand2, jd)
+
+    # 1. Check top-level convenience properties
+    assert res["candidate_a_name"] == "David Miller"
+    assert res["candidate_b_name"] == "Sarah Chen"
+    assert res["candidate_a_score"] == 92.0
+    assert res["candidate_b_score"] == 87.0
+    assert res["candidate_a_exp"] == 6.0
+    assert res["candidate_b_exp"] == 5.0
+    assert res["winner"] == "David Miller"
+    assert "narrative" in res and len(res["narrative"]) > 0
+    assert "tradeoff" in res and len(res["tradeoff"]) > 0
+
+    # 2. Check skill comparison rows
+    sc_map = {row["skill"]: row for row in res["skill_comparison"]}
+    assert "Go" in sc_map
+    assert "Kubernetes" in sc_map
+
+    go_row = sc_map["Go"]
+    assert go_row["a_status"] == "STRONGLY_SUPPORTED"
+    assert go_row["b_status"] == "NOT_MENTIONED"
+    assert go_row["favors"] == "A"
+
+    k8s_row = sc_map["Kubernetes"]
+    assert k8s_row["a_status"] == "PARTIALLY_SUPPORTED"
+    assert k8s_row["b_status"] == "STRONGLY_SUPPORTED"
+    assert k8s_row["favors"] == "B"
+
+    # 3. Test dictionary input compatibility (simulating SQLite retrieval)
+    res_dict = comp.generate_comparison(cand1.to_dict(), cand2.to_dict(), jd.to_dict())
+    assert res_dict["candidate_a_name"] == "David Miller"
+    assert res_dict["candidate_b_name"] == "Sarah Chen"
+    assert res_dict["candidate_a_score"] == 92.0
+    assert res_dict["candidate_b_score"] == 87.0
+    assert res_dict["candidate_a_exp"] == 6.0
+    assert res_dict["candidate_b_exp"] == 5.0
+
+    # 4. Test Flask /api/recruitment/compare endpoint
+    from server import app, _sessions
+    from recruitment.orchestrator import ScreeningResult
+    from recruitment.models import RankedList, RankedCandidate
+    client = app.test_client()
+
+    rk1 = RankedCandidate(rank=1, score=cand1, tradeoff_note="Top candidate")
+    rk2 = RankedCandidate(rank=2, score=cand2, tradeoff_note="Second candidate")
+    rl = RankedList(candidates=[rk1, rk2], jd_role="Lead Cloud Engineer", total_analyzed=2)
+    _sessions["test_run_comp"] = {
+        "result": ScreeningResult(ranked_list=rl, jd_analysis=jd),
+        "done": True
+    }
+
+    resp = client.post("/api/recruitment/compare", json={
+        "run_id": "test_run_comp",
+        "candidate_a": "c1",
+        "candidate_b": "c2",
+    })
+    assert resp.status_code == 200
+    comp_json = resp.get_json()
+    assert comp_json["candidate_a_name"] == "David Miller"
+    assert comp_json["candidate_b_name"] == "Sarah Chen"
+    assert comp_json["candidate_a_score"] == 92.0
+    assert comp_json["candidate_b_score"] == 87.0
+    assert comp_json["candidate_a_exp"] == 6.0
+    assert comp_json["candidate_b_exp"] == 5.0
+    assert comp_json["winner"] == "David Miller"
+    assert len(comp_json["skill_comparison"]) == 2
+    assert comp_json["skill_comparison"][0]["favors"] in ("A", "B", "")
+
+    print("✓ Candidate Comparator Comparison & Flask /api/recruitment/compare endpoint OK")
+
+
 if __name__ == "__main__":
     print("\nRunning ARIA Core — Talent Screening Smoke Tests...")
     test_doc_processor()
@@ -439,5 +560,6 @@ if __name__ == "__main__":
     test_pool_coverage_intersection_zero()
     test_pool_coverage_intersection_nonzero()
     test_tradeoff_shortlist_ordering()
+    test_candidate_comparator_comparison()
     print("\nALL SMOKE TESTS PASSED SUCCESSFULLY! 🚀\n")
 

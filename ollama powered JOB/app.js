@@ -1666,7 +1666,7 @@
   dom.btnRunCompare.addEventListener('click', async () => {
     const idA = dom.compareSelectA.value;
     const idB = dom.compareSelectB.value;
-    if (!idA || !idB || !state.runId) return;
+    if (!idA || !idB) return;
 
     dom.btnRunCompare.disabled = true;
     showToast('Generating AI trade-off comparison...', 'info');
@@ -1676,7 +1676,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          run_id: state.runId,
+          run_id: state.runId || state.screeningResult?.run_id || '',
           candidate_a: idA,
           candidate_b: idB,
         }),
@@ -1697,37 +1697,77 @@
     dom.compareNarrativeCard.classList.remove('hidden');
     dom.compareTableContainer.classList.remove('hidden');
 
-    dom.compareNarrativeText.textContent = data.narrative || 'Detailed comparison generated.';
-    dom.compareWinnerBadge.textContent = data.winner ? `Favored: ${data.winner}` : '';
+    const nameA = data.candidate_a_name || data.candidate_a?.candidate_name || 'Candidate A';
+    const nameB = data.candidate_b_name || data.candidate_b?.candidate_name || 'Candidate B';
+    const scoreA = Number(data.candidate_a_score != null ? data.candidate_a_score : (data.candidate_a?.total_score ?? 0));
+    const scoreB = Number(data.candidate_b_score != null ? data.candidate_b_score : (data.candidate_b?.total_score ?? 0));
+    const expA = Number(data.candidate_a_exp != null ? data.candidate_a_exp : (data.candidate_a?.profile?.total_experience_years ?? data.candidate_a?.relevant_years ?? 0));
+    const expB = Number(data.candidate_b_exp != null ? data.candidate_b_exp : (data.candidate_b?.profile?.total_experience_years ?? data.candidate_b?.relevant_years ?? 0));
+
+    const narrative = data.narrative || data.tradeoff || 'Detailed comparison generated.';
+    const rawWinner = data.winner || data.recommendation || '';
+
+    dom.compareNarrativeText.textContent = narrative;
+
+    if (dom.compareWinnerBadge) {
+      if (rawWinner) {
+        const badgeLabel = (rawWinner.startsWith('Favored') || rawWinner.startsWith('Recommend') || rawWinner.startsWith('Close') || rawWinner.startsWith('Too close'))
+          ? rawWinner
+          : `Favored: ${rawWinner}`;
+        dom.compareWinnerBadge.innerHTML = `<span style="padding: 3px 10px; border-radius: 9999px; background: rgba(16,185,129,0.15); color: var(--emerald); border: 1px solid rgba(16,185,129,0.3); font-weight: 600;">⭐ ${escapeHtml(badgeLabel)}</span>`;
+      } else {
+        dom.compareWinnerBadge.innerHTML = '';
+      }
+    }
 
     // Render Side-by-Side Grid
     dom.compareGrid.innerHTML = `
       <div class="compare-header">Metric / Skill</div>
-      <div class="compare-header">${escapeHtml(data.candidate_a_name || 'Candidate A')}</div>
-      <div class="compare-header">${escapeHtml(data.candidate_b_name || 'Candidate B')}</div>
+      <div class="compare-header">${escapeHtml(nameA)}</div>
+      <div class="compare-header">${escapeHtml(nameB)}</div>
 
       <div class="compare-cell skill-label">Overall Match Score</div>
-      <div class="compare-cell font-mono font-bold">${Math.round(data.candidate_a_score || 0)} / 100</div>
-      <div class="compare-cell font-mono font-bold">${Math.round(data.candidate_b_score || 0)} / 100</div>
+      <div class="compare-cell font-mono font-bold ${scoreA > scoreB ? 'winner' : ''}">${Math.round(scoreA)} / 100</div>
+      <div class="compare-cell font-mono font-bold ${scoreB > scoreA ? 'winner' : ''}">${Math.round(scoreB)} / 100</div>
 
       <div class="compare-cell skill-label">Experience</div>
-      <div class="compare-cell">${(data.candidate_a_exp || 0).toFixed(1)} Years</div>
-      <div class="compare-cell">${(data.candidate_b_exp || 0).toFixed(1)} Years</div>
+      <div class="compare-cell ${expA > expB ? 'winner' : ''}">${expA.toFixed(1)} Years</div>
+      <div class="compare-cell ${expB > expA ? 'winner' : ''}">${expB.toFixed(1)} Years</div>
     `;
 
     // Skill breakdown rows
     if (data.skill_comparison && Array.isArray(data.skill_comparison)) {
+      const statusWeights = {
+        'STRONGLY_SUPPORTED': 3,
+        'PARTIALLY_SUPPORTED': 2,
+        'UNSUPPORTED': 1,
+        'NOT_MENTIONED': 0
+      };
+
       data.skill_comparison.forEach(sc => {
-        const aStatus = sc.a_status || 'NOT_MENTIONED';
-        const bStatus = sc.b_status || 'NOT_MENTIONED';
+        const aStatus = sc.a_status || sc.candidate_a?.status || 'NOT_MENTIONED';
+        const bStatus = sc.b_status || sc.candidate_b?.status || 'NOT_MENTIONED';
+        const explA = sc.candidate_a?.explanation || '';
+        const explB = sc.candidate_b?.explanation || '';
+
+        let favors = sc.favors;
+        if (!favors) {
+          const wa = statusWeights[aStatus] || 0;
+          const wb = statusWeights[bStatus] || 0;
+          if (wa > wb) favors = 'A';
+          else if (wb > wa) favors = 'B';
+        }
+
+        const badgeA = getEvidenceBadge(aStatus);
+        const badgeB = getEvidenceBadge(bStatus);
 
         const rowHtml = `
           <div class="compare-cell skill-label">${escapeHtml(sc.skill)}</div>
-          <div class="compare-cell ${sc.favors === 'A' ? 'winner' : ''}">
-            <span class="evidence-badge ${getEvidenceBadge(aStatus).className}">${getEvidenceBadge(aStatus).label}</span>
+          <div class="compare-cell ${favors === 'A' ? 'winner' : ''}" ${explA ? `title="${escapeHtml(explA)}"` : ''}>
+            <span class="evidence-badge ${badgeA.className}">${badgeA.label}</span>
           </div>
-          <div class="compare-cell ${sc.favors === 'B' ? 'winner' : ''}">
-            <span class="evidence-badge ${getEvidenceBadge(bStatus).className}">${getEvidenceBadge(bStatus).label}</span>
+          <div class="compare-cell ${favors === 'B' ? 'winner' : ''}" ${explB ? `title="${escapeHtml(explB)}"` : ''}>
+            <span class="evidence-badge ${badgeB.className}">${badgeB.label}</span>
           </div>
         `;
         dom.compareGrid.insertAdjacentHTML('beforeend', rowHtml);
